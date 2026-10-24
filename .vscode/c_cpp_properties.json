@@ -1,0 +1,53 @@
+{
+    "configurations": [
+        {
+            "name": "AB2027A3",
+            "includePath": [
+                "${workspaceFolder}/header",
+                "${workspaceFolder}/driver",
+                "${workspaceFolder}/libs",
+                "${workspaceFolder}/libs/ble",
+                "${workspaceFolder}/libs/cpu",
+                "${workspaceFolder}/libs/gui",
+                "${workspaceFolder}/libs/modules/ains",
+                "${workspaceFolder}/libs/modules/thr_track_flash",
+                "${workspaceFolder}/libs/usb",
+                "${workspaceFolder}/libs/wireless",
+                "${workspaceFolder}/modules/ains",
+                "${workspaceFolder}/modules/thr_track_flash",
+                "${workspaceFolder}/modules/utils",
+                "${workspaceFolder}/profiles/**",
+                "${workspaceFolder}/project/ble_all_roles",
+                "${workspaceFolder}/project/ble_all_roles/app",
+                "${workspaceFolder}/project/ble_all_roles/ble",
+                "${workspaceFolder}/project/ble_all_roles/bsp",
+                "${workspaceFolder}/project/ble_all_roles/production_test",
+                "${workspaceFolder}/project/ble_all_roles/production_test/iodm",
+                "${workspaceFolder}/project/ble_all_roles/production_test/tbox",
+                "${workspaceFolder}/project/ble_all_roles/user_app",
+                "${workspaceFolder}/project/ble_all_roles/user_app/user_test"
+            ],
+            "compilerPath": "C:\\msys64\\mingw64\\bin\\gcc.exe",
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "windows-gcc-x64",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/driver/**",
+                    "${workspaceFolder}/header/**",
+                    "${workspaceFolder}/libs/**",
+                    "${workspaceFolder}/modules/**",
+                    "${workspaceFolder}/profiles/**",
+                    "${workspaceFolder}/project/ble_all_roles",
+                    "${workspaceFolder}/project/ble_all_roles/app/**",
+                    "${workspaceFolder}/project/ble_all_roles/ble/**",
+                    "${workspaceFolder}/project/ble_all_roles/bsp/**",
+                    "${workspaceFolder}/project/ble_all_roles/production_test/**",
+                    "${workspaceFolder}/project/ble_all_roles/user_app/**"
+                ],
+                "limitSymbolsToIncludedHeaders": false
+            }
+        }
+    ],
+    "version": 4
+}

@@ -1,0 +1,30 @@
+# 编译中间文件
+
+# Code::Blocks 自动生成的工程状态文件
+*.depend
+*.layout
+
+# 编译目标文件（.o）
+project/*/Output/obj/
+
+# 构建生成的固件镜像、映射表、生成头文件等
+# 保留构建所需的输入文件（脚本、xmaker 配置、资源、下载工具配置）
+project/*/Output/bin/*
+!project/*/Output/bin/prebuild.bat
+!project/*/Output/bin/postbuild.bat
+!project/*/Output/bin/*.xm
+!project/*/Output/bin/res/
+!project/*/Output/bin/Settings/
+!project/*/Output/bin/header.bin
+!project/*/Output/bin/unpack.bin
+!project/*/Output/bin/updater.bin
+
+# xmaker 构建时复制到工程目录的自动生成头文件（prebuild 重新生成）
+project/*/res.h
+project/*/xcfg.h
+
+# 用户编辑区文件
+.agents
+.obsidian
+
+

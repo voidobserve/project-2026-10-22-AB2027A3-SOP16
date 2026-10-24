@@ -1,0 +1,33 @@
+#ifndef __BLE_BINARY_SENSOR_SERVICE_H
+#define __BLE_BINARY_SENSOR_SERVICE_H
+#include "include.h"
+
+// Binary Sensor Service 0x183B
+// PRIMARY_SERVICE, ORG_BLUETOOTH_SERVICE_BINARY_SENSOR
+// CHARACTERISTIC, ORG_BLUETOOTH_CHARACTERISTIC_BSS_CONTROL_POINT, DYNAMIC | WRITE,
+// CHARACTERISTIC, ORG_BLUETOOTH_CHARACTERISTIC_BSS_RESPONSE, DYNAMIC | INDICATE,
+// CLIENT_CHARACTERISTIC_CONFIGURATION, READ | WRITE,
+
+//
+// list service handle ranges
+//
+#define ATT_SERVICE_ORG_BLUETOOTH_SERVICE_BINARY_SENSOR_START_HANDLE 0x0018
+#define ATT_SERVICE_ORG_BLUETOOTH_SERVICE_BINARY_SENSOR_END_HANDLE 0x001d
+
+//
+// list mapping between characteristics and handles
+//
+#define ATT_CHARACTERISTIC_ORG_BLUETOOTH_CHARACTERISTIC_BSS_CONTROL_POINT_01_VALUE_HANDLE 0x001a
+#define ATT_CHARACTERISTIC_ORG_BLUETOOTH_CHARACTERISTIC_BSS_RESPONSE_01_VALUE_HANDLE 0x001c
+#define ATT_CHARACTERISTIC_ORG_BLUETOOTH_CHARACTERISTIC_BSS_RESPONSE_01_CLIENT_CONFIGURATION_HANDLE 0x001d
+
+typedef struct{
+    uint16_t ctr_point;
+    uint16_t rsp_val;
+    uint16_t rsp_client_cfg;
+}ble_binary_sensor_var_t;
+
+void ble_binary_sensor_service_init(void);
+void ble_binary_sensor_service_proc(void);
+void ble_binary_sensor_service_response_indicate(uint8_t *buf, uint16_t buf_size);
+#endif

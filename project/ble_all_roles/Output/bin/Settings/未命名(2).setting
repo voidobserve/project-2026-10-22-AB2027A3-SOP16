@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+    <appSettings>
+        <add key="uosc_both_cap" value="0PF" />
+        <add key="uosci_cap" value="45" />
+        <add key="uosco_cap" value="45" />
+        <add key="ft_osc_cap_en" value="True" />
+        <add key="le_name" value="LE-Remoter" />
+        <add key="le_addr_mode" value="随机地址" />
+        <add key="le_addr" value="41:42:00:00:00:01" />
+        <add key="le_addr_start" value="41:42:00:00:00:00" />
+        <add key="le_addr_step" value="00:00:00:00:00:01" />
+        <add key="le_addr_end" value="41:42:FF:FF:FF:FF" />
+        <add key="bt_rf_pwrdec" value="0" />
+        <add key="rf_tx_pwr" value="0" />
+        <add key="bt_rf_param_en" value="False" />
+        <add key="rf_mix_gain" value="7" />
+        <add key="rf_dig_gain" value="58" />
+    </appSettings>
+</configuration>
