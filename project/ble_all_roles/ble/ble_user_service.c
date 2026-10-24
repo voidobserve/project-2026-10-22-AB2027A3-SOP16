@@ -152,7 +152,7 @@ static int service_write_callback(uint16_t con_handle, uint16_t attribute_handle
 #endif
 #endif
 
-        ble_user_server_message_deal(buffer, buffer_size);
+        // ble_user_server_message_deal(buffer, buffer_size);
 
         // u8 wptr = ble_user_cb.cmd_wptr & BLE_CMD_BUF_MASK;
         // ble_user_cb.cmd_wptr++;

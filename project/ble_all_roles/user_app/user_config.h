@@ -25,7 +25,9 @@ void user_data_read(void);
 void user_init(void);
 void user_main(void);
 
+#if 0
 void ble_user_server_message_deal(u8 *buffer, u16 len);
+#endif
 
 #if USER_DEBUG_ENABLE
 #include "user_debug_io.h"
