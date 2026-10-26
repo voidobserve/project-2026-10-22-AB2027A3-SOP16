@@ -42,6 +42,29 @@
 /* 单帧 SPI 波形缓冲区，静态分配，避免动态内存 */
 static uint8_t led_transport_frame_buf[LED_TRANSPORT_FRAME_BUF_BYTES];
 
+volatile uint32_t spi_isr_cnt; // SPI 完成中断进入次数，调试用
+static volatile uint8_t led_transport_frame_done; // 单帧发送完成标志
+
+/**
+ * @brief SPI DMA 完成中断
+ * @param 无
+ * @return 无
+ * @note SPI 中断源就是 DMA 完成，这里不再判断 pending，直接清标志并置完成
+ */
+AT(.com_text.isr)
+void led_transport_spi_isr(void)
+{
+#if USER_DEBUG_ENABLE
+    // USER_DEBUG_IO_TOGGLE(); // 调试：确认 SPI 中断是否每帧进入一次
+#endif
+    spi_isr_cnt++; // 记录中断次数
+
+    /* 清 SPI pending，避免中断重复进入 */
+    spi_clear_flag(SPI1, SPI_FLAG_PENDING);
+    /* 通知主循环本帧发送完成 */
+    led_transport_frame_done = 1;
+}
+
 /**
  * @brief 将 6 字节协议帧编码为 SPI 波形字节
  * @param frame 指向 6 字节协议帧的指针
@@ -196,8 +219,11 @@ void led_transport_spi_init(void)
     while (!spi_get_flag(SPI1, SPI_FLAG_PENDING)) {
     }
 
-    /* dummy 字节结束后清 pending；SPI 完成状态由主循环轮询 */
+    /* dummy 字节结束后再注册 SPI 中断，避免它触发一次假完成 */
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
+    led_transport_frame_done = 0;
+    /* SPI 完成中断优先级必须为 0，与 TMR1/TMR3 保持一致 */
+    spi_pic_config(SPI1, led_transport_spi_isr, 0, ENABLE);
 
     /* TMR1：在 DMA 结束前提前把 PA3 切回 GPIO 高 */
     clk_gate0_cmd(CLK_GATE0_TMR1, CLK_EN);
@@ -259,16 +285,19 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
            LED_TRANSPORT_GAP_BYTES);
     wave_len += LED_TRANSPORT_GAP_BYTES;
 
-    /* 清旧 pending，SPI 完成状态由主循环轮询 */
+    /* 清旧 pending，SPI 完成状态由中断或主循环轮询处理 */
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
+    led_transport_frame_done = 0;
 
     led_transport_spi_set_spi_output();
 
     spi_dir_sel(SPI1, SPI_DIR_TX);
     spi_set_dma_addr(SPI1, (uint32_t)led_transport_frame_buf);
     spi_set_dma_cnt(SPI1, (uint32_t)wave_len);
+    /* 使能 SPI 中断，等待 DMA 完成中断置 frame_done */
+    spi_it_cmd(SPI1, ENABLE);
 
-    /* TMR1 在 DMA 结束前 50 us 触发，提前切 GPIO 高 */
+    /* TMR1 在 DMA 结束前约 30 us 触发，提前切 GPIO 高 */
     gap_ticks = led_transport_gap_ticks(wave_len);
     tmr_cmd(TMR1, DISABLE);
     if (gap_ticks > 0U) {
@@ -278,9 +307,11 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
         tmr_cmd(TMR1, ENABLE);
     }
 
-    /* 轮询 SPI 完成标志，不再依赖 SPI 中断 */
+    /* SPI 中断优先，轮询作为兜底；超时后强制恢复 */
     guard = 2000000U;
-    while ((spi_get_flag(SPI1, SPI_FLAG_PENDING) == RESET) && (guard > 0U)) {
+    while ((led_transport_frame_done == 0U) &&
+           (spi_get_flag(SPI1, SPI_FLAG_PENDING) == RESET) &&
+           (guard > 0U)) {
         guard--;
     }
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);

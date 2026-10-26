@@ -4,7 +4,7 @@
 
 > **必须遵守的两条硬约束**
 >
-> 1. **TMR1 和 TMR3 中断优先级必须都为 0**，不能把 TMR1 设为 1。TMR1 设为 1 会压住 TMR3，导致 1 ms 时基不到来，fade 动画停住。
+> 1. **TMR1、TMR3、SPI 中断优先级必须都为 0**，不能把 TMR1 设为 1。TMR1 设为 1 会压住 TMR3，导致 1 ms 时基不到来，fade 动画停住，也可能影响 SPI 完成中断。
 > 2. **灯串控制信号空闲时不能有负脉冲**。帧间隔 1312 us 高电平之后必须直接接下一帧的 8~9 us 低电平，中间不能出现 0.5 us 等任何低脉冲，否则灯串可能误判并闪烁。
 
 ---
@@ -107,7 +107,7 @@ flowchart TB
         T4["SPI1 DMA + PA3 GPIO 空闲高"]
     end
 
-    TMR -->|test_led_timer_tick++| UM
+    TMR -->|led_timer_tick++| UM
     UM --> T1
     UM --> P1
     UM --> A1
@@ -144,9 +144,12 @@ flowchart LR
     SUBMIT --> ENC["led_transport_encode_frame()"]
     SUBMIT --> MAP["led_transport_spi_set_spi_output()"]
     SUBMIT --> DMA["spi_set_dma_addr() / spi_set_dma_cnt()"]
-    SUBMIT --> POLL["轮询 SPI_FLAG_PENDING"]
+    SUBMIT --> WAIT["等待 frame_done 或 pending"]
     TMR1ISR["led_transport_gap_isr()"] --> GAP["DMA 结束前 30 us 切 GPIO 高"]
-    POLL --> IDLE["SPI 完成后再切高（兜底）"]
+    SPIISR["led_transport_spi_isr()"] --> DONE["清 pending、置 frame_done"]
+    DONE --> WAIT
+    SUBMIT --> POLL["轮询 SPI_FLAG_PENDING（兜底）"]
+    POLL --> IDLE["SPI 完成后再切高"]
 ```
 
 初始化调用层次：
@@ -158,7 +161,7 @@ flowchart LR
     INIT --> PR0["led_protocol_init()"]
     INIT --> AN0["led_anim_init(0)"]
     INIT --> AN1["led_anim_set_mode(FADE, 0)"]
-    INIT --> TM0["test_led_timer_init()"]
+    INIT --> TM0["tmr3_init()"]
 ```
 
 ---
@@ -174,6 +177,7 @@ sequenceDiagram
     participant TRANS as 传输层
     participant TMR1 as TMR1 中断
     participant SPI as SPI1/DMA
+    participant ISR as SPI 完成中断
     participant LED as PA3/灯串
 
     TMR3->>TMR3: led_timer_tick++
@@ -197,9 +201,10 @@ sequenceDiagram
     TRANS->>SPI: 启动 DMA
     SPI-->>LED: 波形输出
     TMR1->>TRANS: DMA 结束前 30 us 切 GPIO 高
-    SPI-->>TRANS: DMA 完成
-    TRANS->>TRANS: 轮询 SPI_FLAG_PENDING
-    TRANS->>TRANS: 清 pending、关 TMR1、切 GPIO 高（兜底）
+    SPI-->>ISR: DMA 完成中断
+    ISR->>TRANS: 清 pending、frame_done = 1
+    TRANS->>TRANS: 等待 frame_done / 轮询 pending
+    TRANS->>TRANS: 清 pending、关 TMR1、切 GPIO 高
     TRANS-->>MAIN: 返回（阻塞约 3~4.5 ms）
 
     MAIN->>PROTO: led_protocol_advance_lamp()
@@ -225,7 +230,7 @@ sequenceDiagram
     PR-->>INIT: s_lamp_cursor = 0
     INIT->>AN: led_anim_init(0)
     INIT->>AN: led_anim_set_mode(LED_ANIM_FADE, 0)
-    INIT->>TM: test_led_timer_init()
+    INIT->>TM: tmr3_init()
     TM-->>INIT: 1 ms 周期开始
 ```
 
@@ -312,7 +317,8 @@ period = 100 - 1 → 100 × 10 us = 1 ms
 - `user_main()` 每调用一次发一帧；
 - 12 次调用完成灯号 1~12；
 - 帧间隔由 DMA 中的 163 字节 `0xFF` 产生；
-- TMR1 在 DMA 结束前约 30 us 把 PA3 提前切回 GPIO 高电平；主循环轮询 SPI pending 作为兜底；
+- TMR1 在 DMA 结束前约 30 us 把 PA3 提前切回 GPIO 高电平；
+- SPI 完成中断置 `frame_done`，主循环同时保留 pending 轮询和超时保护作为兜底；
 - 下一帧构建和 GPIO 切换会额外增加几十 us，实际帧间隔略大于 1.32 ms。
 
 ---
@@ -447,8 +453,8 @@ void test_led_transport_spi_send_static_12(void);
 - 不使用 `malloc/free`；
 - 不使用递归；
 - 定时器 ISR 只做计数/引脚切换，必须保持短小；
-- SPI 完成状态由主循环轮询，不依赖 SPI 完成中断；
-- TMR1 与 TMR3 中断优先级都必须为 `0`；
+- SPI 完成中断只清 pending、置 `frame_done`；主循环保留 pending 轮询和超时兜底；
+- TMR1、TMR3、SPI 中断优先级都必须为 `0`；
 - ISR 中不调用阻塞函数；
 - 传输层的 `frame_submit()` 只在主循环/任务上下文调用；
 - 所有缓冲区静态分配；
@@ -519,10 +525,20 @@ ticks = units * 1600;
 - 初始化时 `tmr_cmd(TMR1, DISABLE)`；
 - 中断里先 `tmr_cmd(TMR1, DISABLE)`，再清标志、切 GPIO 高；
 - 只在 `frame_submit()` 中启动一次，保证一次性；
-- 主循环轮询 `SPI_FLAG_PENDING` 作为兜底；
+- SPI 完成中断在 dummy 字节之后注册，优先级 0；
+- SPI 中断里无条件清 pending、置 `frame_done`；
+- 主循环优先等待 `frame_done`，同时保留 pending 轮询和超时保护作为兜底；
 - 兜底完成后再清 pending、关 TMR1、切 GPIO 高。
 
-当前代码**不使用 SPI 完成中断**，避免中断未进入导致 `frame_done` 永远不置位。
+当前代码使用 **SPI 完成中断 + 轮询兜底**：
+
+```text
+SPI DMA 完成
+→ SPI ISR 清 pending、置 frame_done
+→ 主循环退出
+```
+
+如果 SPI 中断没有进入，主循环仍能通过轮询 `SPI_FLAG_PENDING` 退出，不会卡死到看门狗。
 
 ### 18.3 实测结果
 
@@ -538,8 +554,9 @@ ticks = units * 1600;
 
 ### 18.4 注意
 
-- TMR1 和 TMR3 的中断优先级**必须都为 0**；
+- TMR1、TMR3、SPI 中断优先级**必须都为 0**；
 - 不能把 TMR1 设为 1，否则会压住 TMR3，fade 会停住；
+- 实测 PA5 在 SPI 中断里每帧翻转一次，周期约 3.7 ms，说明中断每帧正常进入；
 - 如果 TMR1 晚到，空闲低脉冲会重新出现；
 - 如果要求物理上绝对零低，最终方案是加硬件 OR 门：`PA3 = SPI_DATA OR GPIO_IDLE_EN`。
 
@@ -547,11 +564,12 @@ ticks = units * 1600;
 
 ## 19. 踩坑记录（必须遵守）
 
-### 19.1 TMR1/TMR3 中断优先级必须一样，都是 0
+### 19.1 TMR1/TMR3/SPI 中断优先级必须一样，都是 0
 
-TMR1 负责在 DMA 结束前切高，TMR3 负责 1 ms 时基。两者优先级必须一致：
+TMR1 负责在 DMA 结束前切高，TMR3 负责 1 ms 时基，SPI 负责帧完成。三者优先级必须一致：
 
 ```c
+spi_pic_config(SPI1, led_transport_spi_isr, 0, ENABLE);
 tmr_pic_config(TMR1, led_transport_gap_isr, 0, TMR_IT_UPDATE, ENABLE);
 tmr_pic_config(TMR3, timer3_isq, 0, TMR_IT_UPDATE, ENABLE);
 ```
@@ -564,13 +582,15 @@ tmr_pic_config(TMR3, timer3_isq, 0, TMR_IT_UPDATE, ENABLE);
 - TMR3 的 1 ms 中断不能正常到来；
 - `led_timer_tick` 不增加或增加极慢；
 - fade 动画看起来“没有在跑”；
-- 颜色长时间停在红色附近。
+- 颜色长时间停在红色附近；
+- 也可能压住 SPI 完成中断，导致 `frame_done` 不置位。
 
 所以：
 
 ```text
 TMR1 优先级 = 0
 TMR3 优先级 = 0
+SPI 优先级  = 0
 ```
 
 必须保持一致。
@@ -619,19 +639,59 @@ TMR3 优先级 = 0
 - TMR1 必须一次性：初始化关闭，中断里关闭，只在 `frame_submit()` 启动；
 - 如果 TMR1 周期算错，会提前切高，截断整帧，表现为“8.7 us 低 + 3.5 ms 高”。
 
-### 19.4 SPI 完成中断不可靠
+### 19.4 SPI 完成中断的坑
 
-实测 SPI 完成中断没有进入，导致：
+早期 SPI 完成中断没有正常进入，导致：
 
 - `frame_done` 永远不置位；
 - `frame_submit()` 卡死；
 - 看门狗复位；
 - 每约 1.9 s 只发一帧，灯号一直是 1。
 
-所以当前改为：
+后来定位到几个问题：
+
+1. TMR1 优先级设成 1，可能压住 SPI/TMR3；
+2. SPI 中断在 dummy 字节之前注册，dummy 完成会干扰 pending；
+3. ISR 里先判断 `spi_get_flag()`，如果 pending 被硬件自动清除，就不会置 `frame_done`。
+
+现在的处理：
 
 ```text
-主循环轮询 SPI_FLAG_PENDING
+SPI1 初始化
+→ 先发 dummy 0xFF 并等完成
+→ 清 pending
+→ 再注册 SPI 完成中断
 ```
 
-不再依赖 SPI 完成中断。
+ISR 改为无条件处理：
+
+```c
+AT(.com_text.isr)
+void led_transport_spi_isr(void)
+{
+#if USER_DEBUG_ENABLE
+    USER_DEBUG_IO_TOGGLE();
+#endif
+    spi_isr_cnt++;
+
+    spi_clear_flag(SPI1, SPI_FLAG_PENDING);
+    led_transport_frame_done = 1;
+}
+```
+
+主循环仍保留：
+
+```text
+frame_done 优先
+pending 轮询兜底
+超时保护
+```
+
+实测 PA5 每帧翻转一次，周期约 3.7 ms，说明 SPI 完成中断已经正常进入。
+
+不要恢复以下旧写法：
+
+- SPI 中断在 dummy 之前注册；
+- TMR1 优先级设为 1；
+- ISR 里只判断 `spi_get_flag()` 才置 `frame_done`；
+- 删除 pending 轮询和超时保护。
