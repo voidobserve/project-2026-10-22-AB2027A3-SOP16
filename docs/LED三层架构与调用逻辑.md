@@ -145,7 +145,7 @@ flowchart LR
     SUBMIT --> MAP["led_transport_spi_set_spi_output()"]
     SUBMIT --> DMA["spi_set_dma_addr() / spi_set_dma_cnt()"]
     SUBMIT --> WAIT["等待 frame_done 或 pending"]
-    TMR1ISR["led_transport_gap_isr()"] --> GAP["DMA 结束前 30 us 切 GPIO 高"]
+    TMR1ISR["led_transport_gap_isr()"] --> GAP["DMA 结束前 500 us 切 GPIO 高"]
     SPIISR["led_transport_spi_isr()"] --> DONE["清 pending、置 frame_done"]
     DONE --> WAIT
     SUBMIT --> POLL["轮询 SPI_FLAG_PENDING（兜底）"]
@@ -200,7 +200,7 @@ sequenceDiagram
     TRANS->>TRANS: 48 bit 编码 + 帧尾 + 163×0xFF
     TRANS->>SPI: 启动 DMA
     SPI-->>LED: 波形输出
-    TMR1->>TRANS: DMA 结束前 30 us 切 GPIO 高
+    TMR1->>TRANS: DMA 结束前 500 us 切 GPIO 高
     SPI-->>ISR: DMA 完成中断
     ISR->>TRANS: 清 pending、frame_done = 1
     TRANS->>TRANS: 等待 frame_done / 轮询 pending
@@ -317,7 +317,7 @@ period = 100 - 1 → 100 × 10 us = 1 ms
 - `user_main()` 每调用一次发一帧；
 - 12 次调用完成灯号 1~12；
 - 帧间隔由 DMA 中的 163 字节 `0xFF` 产生；
-- TMR1 在 DMA 结束前约 30 us 把 PA3 提前切回 GPIO 高电平；
+- TMR1 在 DMA 结束前约 500 us 把 PA3 提前切回 GPIO 高电平；
 - SPI 完成中断置 `frame_done`，主循环同时保留 pending 轮询和超时保护作为兜底；
 - 下一帧构建和 GPIO 切换会额外增加几十 us，实际帧间隔略大于 1.32 ms。
 
@@ -499,10 +499,10 @@ SPI DMA 结束后，SPI1 会把 PA3 拉低。如果 GPIO 切换晚了，空闲�
 
 ### 18.2 当前处理
 
-用 **TMR1 在 DMA 结束前约 30 us 提前切高**：
+用 **TMR1 在 DMA 结束前约 500 us 提前切高**：
 
 ```text
-DMA 结束前 30 us：TMR1 中断
+DMA 结束前 500 us：TMR1 中断
 → 此时 SPI 还在输出 0xFF 高电平
 → 切 GPIO 高，高到高
 → 不产生低脉冲
@@ -512,12 +512,12 @@ TMR1 按 **10 us 分辨率**工作，10 us 对应 1600 个计数：
 
 ```c
 #define LED_TRANSPORT_TMR1_10US_TICKS 1600U
-#define LED_TRANSPORT_GAP_SWITCH_MARGIN_US 30U
+#define LED_TRANSPORT_GAP_SWITCH_MARGIN_US 500U
 ```
 
 ```c
 us = wave_len * 8;
-us -= 30;
+us -= 500;
 units = us / 10;
 ticks = units * 1600;
 ```
@@ -544,11 +544,11 @@ SPI DMA 完成
 
 最新波形：
 
-- 采集 2304 ms；
-- 636 帧；
-- 所有低电平：**8.0~9.29 us**；
-- 所有高电平：**24~1355.67 us**；
-- 帧间隔后的 **0.5 us 负脉冲已经消失**；
+- 采集 46634 ms；
+- 10753 个帧间隔；
+- 所有帧间隔后的低电平都 ≥ 8.0 us；
+- 没有 <7 us 的负脉冲；
+- 10753 个帧间隔全部干净，负脉冲数量为 0；
 - 灯号 1~12 连续循环；
 - fade 正常推进。
 

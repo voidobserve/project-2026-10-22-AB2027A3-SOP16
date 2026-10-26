@@ -11,7 +11,7 @@
 /*****************************************************************************
  * Module    : Function选择相关配置
  *****************************************************************************/
-#define FUNC_BT_EN                      0   // 是否打开蓝牙功能
+#define FUNC_BT_EN                      1   // 是否打开蓝牙功能
 #define FUNC_LE_FCC_EN                  0   // 是否打开蓝牙FCC测试功能
 #define FUNC_LE_BQB_RF_EN               0   // 是否打开蓝牙BQB测试功能
 #define FUNC_IODM_EN                    0   // 是否打开小牛测控功能, 使用单线串口通信,默认： VUSB, 115200
@@ -82,7 +82,7 @@
  *****************************************************************************/
 #define OS_THREAD_MAIN_STACK            1024                                // main线程堆栈大小
 #define OS_THREAD_TIMER_STACK           768                                 // timer线程堆栈大小
-#define OS_THREAD_BT_STACK_EN           0                                   // 蓝牙线程使能
+#define OS_THREAD_BT_STACK_EN           1                                   // 蓝牙线程使能
 #define OS_THREAD_BT_STACK              1536                                // 蓝牙线程堆栈大小
 #define OS_THREAD_AUPCM_STACK_EN        0                                   // AUPCM线程使能(有mic功能需使能)
 #define OS_THREAD_AUPCM_STACK           1024                                // AUPCM线程堆栈大小

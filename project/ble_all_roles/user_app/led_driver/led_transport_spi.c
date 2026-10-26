@@ -16,9 +16,11 @@
 #define LED_TRANSPORT_BIT1_HIGH_BYTES 7U
 /* 帧间隔 1320 us；1 MHz SPI 下 1 字节 = 8 us，163 字节 = 1304 us，加帧尾 16 us = 1320 us */
 #define LED_TRANSPORT_GAP_BYTES 163U
-// #define LED_TRANSPORT_GAP_BYTES 375U
 /* 在 DMA 结束前提前切 GPIO 高的时间，按 TMR1 的 10 us 分辨率取 30 us */
-#define LED_TRANSPORT_GAP_SWITCH_MARGIN_US 30U
+// #define LED_TRANSPORT_GAP_SWITCH_MARGIN_US 30U
+/* 在 DMA 结束前提前切 GPIO 高的时间，按 TMR1 的 10 us 分辨率取 500 us，提前 500 us 把 GPIO 切为高电平
+    帧间隔有 1312 us，提前量可以大幅增加，不会切到数据区 */
+#define LED_TRANSPORT_GAP_SWITCH_MARGIN_US 500U
 /* 实测 TMR1 计数 10 us 对应 1600 个计数（160 MHz 系统时钟） */
 #define LED_TRANSPORT_TMR1_10US_TICKS 1600U
 /* 初始化后保持空闲高电平 300 us，确保灯串芯片从帧边界开始 */
@@ -154,20 +156,34 @@ static uint32_t led_transport_gap_ticks(uint16_t wave_len)
     return units * LED_TRANSPORT_TMR1_10US_TICKS;
 }
 
-/**
- * @brief TMR1 中断：在 DMA 结束前把 PA3 切回 GPIO 高
- * @param 无
- * @return 无
- * @note 此时 SPI 还在输出 0xFF 高电平，切换是高到高，不产生低电平
- */
+// /**
+//  * @brief TMR1 中断：在 DMA 结束前把 PA3 切回 GPIO 高
+//  * @param 无
+//  * @return 无
+//  * @note 此时 SPI 还在输出 0xFF 高电平，切换是高到高，不产生低电平
+//  */
+// AT(.com_text.isr)
+// void led_transport_gap_isr(void)
+// {
+//     if (tmr_get_flag(TMR1, TMR_IT_UPDATE) != RESET) {
+//         tmr_clear_flag(TMR1, TMR_IT_UPDATE);
+//         tmr_cmd(TMR1, DISABLE);
+//         led_transport_spi_set_idle_high();
+//         // USER_DEBUG_IO_TOGGLE();
+//     }
+// }
+
 AT(.com_text.isr)
 void led_transport_gap_isr(void)
 {
     if (tmr_get_flag(TMR1, TMR_IT_UPDATE) != RESET) {
-        tmr_clear_flag(TMR1, TMR_IT_UPDATE);
         tmr_cmd(TMR1, DISABLE);
-        led_transport_spi_set_idle_high();
-        // USER_DEBUG_IO_TOGGLE();
+        tmr_clear_flag(TMR1, TMR_IT_UPDATE);
+
+        /* 直接操作寄存器，避免在 ISR 中调用 Flash 函数 */
+        GPIOA_REG->io_set = (uint32_t)LED_TRANSPORT_GPIO_PIN;
+        GPIOA_REG->fdir &= ~(uint32_t)LED_TRANSPORT_GPIO_PIN;
+        GPIOA_REG->fen &= ~(uint32_t)LED_TRANSPORT_GPIO_PIN;
     }
 }
 
@@ -179,8 +195,8 @@ void led_transport_gap_isr(void)
  */
 void led_transport_spi_init(void)
 {
-    gpio_init_typedef gpio_init_struct;   // GPIO 初始化参数
-    spi_init_typedef spi_init_struct;     // SPI 初始化参数
+    gpio_init_typedef gpio_init_struct;      // GPIO 初始化参数
+    spi_init_typedef spi_init_struct;        // SPI 初始化参数
     tmr_base_init_typedef timer_init_struct; // TMR1 初始化参数
 
     clk_gate1_cmd(CLK_GATE1_SPI1, CLK_EN);
@@ -225,6 +241,7 @@ void led_transport_spi_init(void)
     /* SPI 完成中断优先级必须为 0，与 TMR1/TMR3 保持一致 */
     spi_pic_config(SPI1, led_transport_spi_isr, 0, ENABLE);
 
+#if 1
     /* TMR1：在 DMA 结束前提前把 PA3 切回 GPIO 高 */
     clk_gate0_cmd(CLK_GATE0_TMR1, CLK_EN);
     // 用系统时钟计数（SYS_160M = 160 MHz），0.00625 us 一个计数
@@ -238,7 +255,7 @@ void led_transport_spi_init(void)
     tmr_base_init(TMR1, &timer_init_struct);
     tmr_pic_config(TMR1, led_transport_gap_isr, 0, TMR_IT_UPDATE, ENABLE);
     tmr_cmd(TMR1, DISABLE);
-
+#endif
 
     /* 保持一段空闲高电平，避免初始化时的短脉冲被当作数据位 */
     delay_us(LED_TRANSPORT_INIT_IDLE_US);
@@ -274,7 +291,7 @@ bool led_transport_spi_frame_ready(void)
  */
 void led_transport_spi_frame_submit(const uint8_t *frame)
 {
-    uint16_t wave_len; // 编码后的波形字节数
+    uint16_t wave_len;  // 编码后的波形字节数
     uint32_t gap_ticks; // TMR1 提前切换计数值
     uint32_t guard;     // 等待 SPI 完成的超时计数
 
@@ -297,6 +314,7 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
     /* 使能 SPI 中断，等待 DMA 完成中断置 frame_done */
     spi_it_cmd(SPI1, ENABLE);
 
+#if 1
     /* TMR1 在 DMA 结束前约 30 us 触发，提前切 GPIO 高 */
     gap_ticks = led_transport_gap_ticks(wave_len);
     tmr_cmd(TMR1, DISABLE);
@@ -306,16 +324,16 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
         tmr_set_counter(TMR1, 0U);
         tmr_cmd(TMR1, ENABLE);
     }
+#endif
 
     /* SPI 中断优先，轮询作为兜底；超时后强制恢复 */
     guard = 2000000U;
     while ((led_transport_frame_done == 0U) &&
-           (spi_get_flag(SPI1, SPI_FLAG_PENDING) == RESET) &&
-           (guard > 0U)) {
+           (spi_get_flag(SPI1, SPI_FLAG_PENDING) == RESET) && (guard > 0U)) {
         guard--;
     }
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
-    tmr_cmd(TMR1, DISABLE);
+    // tmr_cmd(TMR1, DISABLE);
     led_transport_spi_set_idle_high();
 }
 

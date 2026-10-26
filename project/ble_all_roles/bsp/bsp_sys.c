@@ -210,8 +210,8 @@ void bsp_sys_init(void)
 
     printf("%s\n",__func__);
 
-    // func_cb.sta = FUNC_BT;
-    func_cb.sta = FUNC_IDLE;
+    func_cb.sta = FUNC_BT;
+    // func_cb.sta = FUNC_IDLE; 
 }
 
 void bsp_periph_init(void)
