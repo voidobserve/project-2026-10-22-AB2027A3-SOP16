@@ -1,15 +1,6 @@
 #include "key_driver.h"
 
-#include "typedef.h"
-
-enum
-{
-    KEY_SCAN_STATUS_NONE = 0,       // 无特殊状态
-    KEY_SCAN_STATUS_TO_NOTIFY,      // 发送按键消息
-    KEY_SCAN_STATUS_TO_END_OF_SCAN, // 按键扫描结束，进行收尾处理
-};
-
-static volatile u8 is_key_active; // 按键是否有效的计数值
+static volatile uint8_t is_key_active; // 按键是否有效的计数值
 
 //=======================================================//
 // 按键扫描函数: 扫描所有注册的按键驱动
@@ -17,18 +8,15 @@ static volatile u8 is_key_active; // 按键是否有效的计数值
 // xdata volatile struct key_driver_para *scan_para; // 要让指针指向xdata区域的全局变量，需要同样将指针变为全局变量
 // 要让指针指向xdata区域的全局变量，需要同样将指针变为全局变量
 volatile struct key_driver_para *scan_para;
-void key_driver_scan(void *_scan_para)
-// struct key_driver_para key_driver_scan(struct key_driver_para scan_para)
+// void key_driver_scan(void *_scan_para)
+struct key_driver_para key_driver_scan(struct key_driver_para *_scan_para)
 {
-    // volatile struct key_driver_para xdata *scan_para = (struct key_driver_para xdata *)_scan_para; // 函数内部的指针只能指向idata空间，不能指向全局变量的xdata空间
-    // volatile struct key_driver_para xdata *scan_para = (struct key_driver_para xdata *)0x642D; // 系统会一直复位
 
 #if 1
-    u8 key_event = KEY_EVENT_NONE; // 存放待发送的按键事件
-    u8 cur_key_value = NO_KEY;     // 存放待发送的按键键值
-    u8 key_value = NO_KEY;
+    uint8_t key_event = KEY_EVENT_NONE; // 存放待发送的按键事件
+    uint8_t cur_key_value = NO_KEY;     // 存放待发送的按键键值
+    uint8_t key_value = NO_KEY;
 
-    // u8 key_scan_status = KEY_SCAN_STATUS_NONE; // 状态机，负责控制该函数内的跳转操作 /* 控制跳转还有问题，还不能使用 */
 
     scan_para = (struct key_driver_para *)_scan_para;
 

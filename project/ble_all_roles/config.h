@@ -11,12 +11,12 @@
 /*****************************************************************************
  * Module    : Function选择相关配置
  *****************************************************************************/
-#define FUNC_BT_EN                      1   // 是否打开蓝牙功能
+#define FUNC_BT_EN                      0   // 是否打开蓝牙功能
 #define FUNC_LE_FCC_EN                  0   // 是否打开蓝牙FCC测试功能
 #define FUNC_LE_BQB_RF_EN               0   // 是否打开蓝牙BQB测试功能
 #define FUNC_IODM_EN                    0   // 是否打开小牛测控功能, 使用单线串口通信,默认： VUSB, 115200
 #define FUNC_TBOX_EN                    0   // 是否打开测试盒产测功能，请阅读prod_test_tbox.h的测试盒产测说明
-#define FUNC_IDLE_EN                    0   // 是否打开IDLE功能
+#define FUNC_IDLE_EN                    1   // 是否打开IDLE功能
 
 /*****************************************************************************
  * Module    : 系统功能选择配置
@@ -82,7 +82,7 @@
  *****************************************************************************/
 #define OS_THREAD_MAIN_STACK            1024                                // main线程堆栈大小
 #define OS_THREAD_TIMER_STACK           768                                 // timer线程堆栈大小
-#define OS_THREAD_BT_STACK_EN           1                                   // 蓝牙线程使能
+#define OS_THREAD_BT_STACK_EN           0                                   // 蓝牙线程使能
 #define OS_THREAD_BT_STACK              1536                                // 蓝牙线程堆栈大小
 #define OS_THREAD_AUPCM_STACK_EN        0                                   // AUPCM线程使能(有mic功能需使能)
 #define OS_THREAD_AUPCM_STACK           1024                                // AUPCM线程堆栈大小
@@ -98,6 +98,7 @@
 /*****************************************************************************
  * Module    : BLE 功能配置
  *****************************************************************************/
+#define LE_ADV_EN                       0           // 从机广播总使能(1:开启广播,手机可发现并连接本机; 0:关闭广播,本机不对外广播,仅作主机扫描连接)
 #define LE_SM_EN                        1           // SM使能
 #define LE_MTU_EXCHANGE_EN              1           // 连接后主动发起MTU使能
 #define LE_SM_SEND_SECURITY_REQ_TIME    500         // 从机发起加密的延时，unit: ms

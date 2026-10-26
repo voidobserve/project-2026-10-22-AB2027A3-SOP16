@@ -2,6 +2,8 @@
 #include "driver_uart.h"
 #include "driver_tmr.h"
 #include "led_driver/led_transport_spi.h"
+#include "led_driver/led_protocol.h"
+#include "led_driver/led_animation.h"
 
 // #include "driver_gpio.h" // 初始化 测试时使用的gpio，需要引用该头文件
 
@@ -9,57 +11,45 @@ volatile user_data_t user_data = {0};
 
 #define USER_DATE_SAVE_START_ADDR 0x00 // 起始地址
 
-/* 测试定时器周期：10 ms */
-#define TEST_LED_TIMER_PERIOD_MS     10U
-/* 1 秒对应的毫秒数 */
-#define TEST_LED_MS_PER_SECOND       1000U
+/* 1 ms 定时器中断生产的节拍计数，中断与主循环共享，必须 volatile */
+static volatile uint32_t led_timer_tick = 0;
 
-/* 10 ms 定时器中断生产的节拍计数，中断与主循环共享，必须 volatile */
-static volatile uint32_t test_led_timer_tick = 0;
-/* 消费者上一次处理的节拍计数 */
-static uint32_t test_led_last_tick = 0;
-
-/**
- * @brief 10 ms 硬件定时器中断：生产者，只递增节拍计数
- * @param 无
- * @return 无
- */
 AT(.com_text.isr)
-void test_led_timer_isr(void)
+void timer3_isq(void)
 {
-    if (tmr_get_flag(TMR0, TMR_IT_UPDATE)) {
-        tmr_clear_flag(TMR0, TMR_IT_UPDATE);
-        test_led_timer_tick++;
+    if (tmr_get_flag(TMR3, TMR_IT_UPDATE) != RESET) {
+        tmr_clear_flag(TMR3, TMR_IT_UPDATE);
+        led_timer_tick++;
+        // USER_DEBUG_IO_TOGGLE();
     }
 }
 
 /**
- * @brief 初始化 10 ms 硬件定时器
+ * @brief 初始化 1 ms 硬件定时器
  * @param 无
  * @return 无
- * @note TMR0 使用当前 TMR_INC 计数时钟，按实际频率折算 10 ms
+ * 
  */
-static void test_led_timer_init(void)
+static void tmr3_init(void)
 {
-    tmr_base_init_typedef timer_init_struct; // TMR0 初始化参数
-    uint32_t tmr_inc_hz; // TMR_INC 当前计数频率
-    uint32_t tick_divider; // 10 ms 对应的计数分频值（1000 / 10）
+    tmr_base_init_typedef timer_init_struct; // 定时器初始化参数
 
-    tmr_inc_hz = clk_tmr_inc_get(CLK_VALUE_MODE_FREQ);
-    tick_divider = TEST_LED_MS_PER_SECOND / TEST_LED_TIMER_PERIOD_MS;
-    if (tmr_inc_hz < tick_divider) {
-        return; // 时钟频率异常，避免定时器产生过密中断
-    }
+    clk_gate1_cmd(CLK_GATE1_TMR3, CLK_EN);
 
-    timer_init_struct.period = (tmr_inc_hz / tick_divider) - 1U;
-    timer_init_struct.prescale = 0;
-    timer_init_struct.counter_source = TMR_INC_SOURCE;
+    /* TMR3 用系统时钟计数（SYS_160M = 160 MHz），不是 clk_tmr_inc_get() 的 TMR_INC（1 MHz）
+       中断周期 = (prescale + 1) * (period + 1) / 计数时钟
+       1600 分频后每 10 us 计数一次，计 100 次 = 1 ms
+       注意：以下固定值与 SYS_160M 对应，改 SYS_CLK_SEL 需重新计算 */
     timer_init_struct.clock_source = TMR_SYSTEM_CLOCK;
+    timer_init_struct.counter_source = TMR_INC_SOURCE;
+    /* TMR3 计数时钟：160 MHz / 1600 = 100 kHz，即 10 us 一个计数 */
+    timer_init_struct.prescale = 1600U - 1U;
+    /* 1 ms = 100 × 10 us */
+    timer_init_struct.period = 100U - 1U;
+    tmr_base_init(TMR3, &timer_init_struct);
 
-    clk_gate0_cmd(CLK_GATE0_TMR0, CLK_EN);
-    tmr_base_init(TMR0, &timer_init_struct);
-    tmr_pic_config(TMR0, test_led_timer_isr, 0, TMR_IT_UPDATE, ENABLE);
-    tmr_cmd(TMR0, ENABLE);
+    tmr_pic_config(TMR3, timer3_isq, 0, TMR_IT_UPDATE, ENABLE);
+    tmr_cmd(TMR3, ENABLE);
 }
 
 void user_data_write(void)
@@ -102,9 +92,13 @@ void user_init(void)
 #endif
 
     led_transport_spi_init();
-    test_led_timer_init();
+    led_transport_spi_frame_init();
+    led_protocol_init();
+    led_anim_init(0);
+    led_anim_set_mode(LED_ANIM_FADE, 0);
+    tmr3_init();
 
-    // delay_ms(10);
+    delay_ms(10);
 }
 
 #if 0
@@ -121,15 +115,25 @@ void ble_user_server_message_deal(u8 *buff, u16 len)
 // 会循环调用，所以该函数内部不用写 while(1)
 void user_main(void)
 {
-    uint32_t tick; // 本次读取到的 10 ms 节拍
+    uint32_t now;                   // 当前 1 ms 时间
+    uint8_t lamp_idx;               // 当前灯号
+    led_color_t color;              // 当前灯颜色
+    uint8_t frame[LED_FRAME_BYTES]; // 协议帧
 
-    tick = test_led_timer_tick;
-    if (tick != test_led_last_tick) {
-        test_led_last_tick = tick;
-        /* 一次 12 帧约 36 ms，发送期间产生的 10 ms 节拍会合并到下一次 */
-        test_led_transport_spi_send_static_12();
+#if 1
+    led_transport_spi_frame_poll();
+
+    if (!led_transport_spi_frame_ready()) {
+        return;
     }
 
-    // printf("main\n");
-    USER_DEBUG_IO_TOGGLE();
+    now = led_timer_tick;
+    lamp_idx = led_protocol_current_lamp();
+    led_anim_get_lamp_color(now, lamp_idx, &color);
+    led_protocol_build_frame(lamp_idx, &color, frame);
+
+    led_transport_spi_frame_submit(frame);
+
+    led_protocol_advance_lamp();
+#endif
 }

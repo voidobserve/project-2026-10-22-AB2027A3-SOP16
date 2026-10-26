@@ -119,7 +119,7 @@ void ble_adv_param_init(void)
     adv_info.adv_int_min = adv_info.adv_int_max = 0x30; // 广播间隔设置为0x30 (48 * 0.625ms = 30ms)
     adv_info.adv_type = ADV_TYPE_IND; // 广播类型：可连接的非定向广播
     adv_info.channel_map = ADV_ALL_CHNLS_EN; // 启用所有广播通道 (37, 38, 39)
-    adv_info.adv_en = 1;
+    adv_info.adv_en = LE_ADV_EN; // 从机广播总使能,见 config.h(填0则上电不广播)
 
     ble_set_adv_param(&adv_info);
 }

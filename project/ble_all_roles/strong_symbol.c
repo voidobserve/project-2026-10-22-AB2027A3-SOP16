@@ -215,7 +215,8 @@ bool ble_sm_pairing_support(void)
 
 bool ble_disconnected_restart_adv(void)
 {
-    return LE_DISCONN_RESTART_ADV_EN;
+    // 从机广播总开关(LE_ADV_EN)关闭时,断连也不再自动开广播
+    return LE_ADV_EN && LE_DISCONN_RESTART_ADV_EN;
 }
 
 bool ble_rx_exit_sleep(void)
