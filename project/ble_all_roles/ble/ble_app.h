@@ -44,7 +44,9 @@ typedef struct
 
 void ble_app_env_init(void);
 void ble_conn_state_set(uint8_t state, uint8_t conidx, uint8_t role);
+#if LE_MASTER_CONNECT_EN
 void ble_advertising_report_callback(adv_report_t adv_report);
+#endif
 uint8_t ble_get_conn_cnt(uint8_t role);
 void ble_adv_scan_state_correct(void);
 

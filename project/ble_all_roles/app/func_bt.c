@@ -40,6 +40,9 @@ AT(.text.func.bt)
 void func_bt_init(void)
 {
     bsp_ble_init();
+
+    /* 蓝牙初始化完成后再启动 LED 独立线程，避免初始化阶段抢 Flash */
+    led_thread_start();
 }
 
 AT(.text.func.bt)

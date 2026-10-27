@@ -5,6 +5,10 @@
 #include "led_driver/led_protocol.h"
 #include "led_driver/led_animation.h"
 
+#include "key_driver.h"
+#include "rf24g_remoter_driver.h"
+#include "rf24g_remoter_apply.h"
+
 // #include "driver_gpio.h" // 初始化 测试时使用的gpio，需要引用该头文件
 
 volatile user_data_t user_data = {0};
@@ -20,6 +24,11 @@ void timer3_isq(void)
     if (tmr_get_flag(TMR3, TMR_IT_UPDATE) != RESET) {
         tmr_clear_flag(TMR3, TMR_IT_UPDATE);
         led_timer_tick++;
+        if (rf24g_scan_para.cur_scan_times < UINT8_MAX) {
+            rf24g_scan_para.cur_scan_times++;
+        }
+
+        // TEST ONLY
         // USER_DEBUG_IO_TOGGLE();
     }
 }
@@ -50,6 +59,65 @@ static void tmr3_init(void)
 
     tmr_pic_config(TMR3, timer3_isq, 0, TMR_IT_UPDATE, ENABLE);
     tmr_cmd(TMR3, ENABLE);
+}
+
+/* driver 线程的 LED 帧消息 */
+#define LED_THREAD_MSG_TICK 0x81U
+
+/* LED 线程回调是否注册成功 */
+static volatile uint8_t led_thread_registered;
+/* LED 线程是否已经启动，避免重复投递 */
+static volatile uint8_t led_thread_started;
+
+/**
+ * @brief driver 线程的 LED 事件回调
+ * @param msg 消息号
+ * @return 无
+ * @note 每发完一帧再投递下一帧，避免阻塞 driver 线程消息循环
+ */
+AT(.com_text.thread.driver)
+static void led_thread_event_callback(uint8_t msg)
+{
+    if (msg != LED_THREAD_MSG_TICK) {
+        return;
+    }
+
+    user_main();
+
+    /* 继续投递下一帧；失败则退回主循环，避免灯效完全停止 */
+    if (!thread_driver_msg_post(LED_THREAD_MSG_TICK)) {
+        led_thread_registered = 0;
+    }
+}
+
+/**
+ * @brief 启动 LED 独立线程
+ * @param 无
+ * @return 无
+ * @note 蓝牙开启时在蓝牙初始化完成后调用；蓝牙关闭时在 user_init 中调用
+ */
+void led_thread_start(void)
+{
+    if ((led_thread_registered == 0U) || (led_thread_started != 0U)) {
+        return;
+    }
+
+    if (thread_driver_msg_post(LED_THREAD_MSG_TICK)) {
+        led_thread_started = 1;
+    } else {
+        /* 投递失败时退回主循环，避免灯效完全停止 */
+        led_thread_registered = 0;
+    }
+}
+
+/**
+ * @brief 查询 LED 独立线程是否可用
+ * @param 无
+ * @return true 可独立运行；false 注册失败，需要主循环兜底
+ */
+bool led_thread_available(void)
+{
+    return (led_thread_registered != 0U);
 }
 
 void user_data_write(void)
@@ -98,6 +166,15 @@ void user_init(void)
     led_anim_set_mode(LED_ANIM_FADE, 0);
     tmr3_init();
 
+    /* 注册 driver 线程回调；蓝牙开启时等蓝牙初始化完成后再启动 */
+    led_thread_registered = (uint8_t)thread_driver_user_callback_register(
+        led_thread_event_callback);
+
+#if !FUNC_BT_EN
+    /* 蓝牙关闭时直接启动 LED 独立线程 */
+    led_thread_start();
+#endif
+
     delay_ms(10);
 }
 
@@ -111,14 +188,17 @@ void ble_user_server_message_deal(u8 *buff, u16 len)
 }
 #endif
 
-// 在 project/ble_all_roles/app/func.c -> func_process() 中调用
-// 会循环调用，所以该函数内部不用写 while(1)
+// 由 driver 线程的 LED 消息回调调用
+// 会循环投递，所以该函数内部不用写 while(1)
 void user_main(void)
 {
     uint32_t now;                   // 当前 1 ms 时间
     uint8_t lamp_idx;               // 当前灯号
     led_color_t color;              // 当前灯颜色
     uint8_t frame[LED_FRAME_BYTES]; // 协议帧
+
+    key_driver_scan(&rf24g_scan_para);
+    rf24g_remoter_apply();
 
 #if 1
     led_transport_spi_frame_poll();

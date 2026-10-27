@@ -16,7 +16,7 @@
 #define FUNC_LE_BQB_RF_EN               0   // 是否打开蓝牙BQB测试功能
 #define FUNC_IODM_EN                    0   // 是否打开小牛测控功能, 使用单线串口通信,默认： VUSB, 115200
 #define FUNC_TBOX_EN                    0   // 是否打开测试盒产测功能，请阅读prod_test_tbox.h的测试盒产测说明
-#define FUNC_IDLE_EN                    1   // 是否打开IDLE功能
+#define FUNC_IDLE_EN                    0   // 是否打开IDLE功能
 
 /*****************************************************************************
  * Module    : 系统功能选择配置
@@ -86,8 +86,8 @@
 #define OS_THREAD_BT_STACK              1536                                // 蓝牙线程堆栈大小
 #define OS_THREAD_AUPCM_STACK_EN        0                                   // AUPCM线程使能(有mic功能需使能)
 #define OS_THREAD_AUPCM_STACK           1024                                // AUPCM线程堆栈大小
-#define OS_THREAD_DRIVER_STACK_EN       0                                   // driver线程使能(有USB功能需使能)
-#define OS_THREAD_DRIVER_STACK          1024                                // driver线程堆栈大小
+#define OS_THREAD_DRIVER_STACK_EN       1                                   // driver线程使能(LED独立任务/USB功能)
+#define OS_THREAD_DRIVER_STACK          1536                                // driver线程堆栈大小
 
 /*****************************************************************************
  * Module    : 产测测试项配置
@@ -99,16 +99,25 @@
  * Module    : BLE 功能配置
  *****************************************************************************/
 #define LE_ADV_EN                       0           // 从机广播总使能(1:开启广播,手机可发现并连接本机; 0:关闭广播,本机不对外广播,仅作主机扫描连接)
-#define LE_SM_EN                        1           // SM使能
-#define LE_MTU_EXCHANGE_EN              1           // 连接后主动发起MTU使能
+#define LE_SM_EN                        0           // SM使能(连接后加密才用到,当前不连接故关闭)
+#define LE_MTU_EXCHANGE_EN              0           // 连接后主动发起MTU使能(当前不连接故关闭)
 #define LE_SM_SEND_SECURITY_REQ_TIME    500         // 从机发起加密的延时，unit: ms
 #define LE_SM_ALWAYS_ACCEPT_LTK_REQ_EN  0           // SM总是接受LTK请求使能
 #define LE_DISCONN_RESTART_ADV_EN       1           // 断连自动开广播使能
 #define LE_RX_EXIT_SLEEP_EN             0           // RX到数据自动退出睡眠使能
 #define LE_PHY_2M_EN                    1           // 支持2M包使能
 #define LE_PHY_UPDATE_EN                0           // 连接后主动发起PHY使能
-#define LE_FEATURE_EXCHANGE_EN          1           // 连接后主动发起FEATURE使能
-#define LE_LENGTH_REQ_EN                1           // 连接后主动发起length request使能
+#define LE_FEATURE_EXCHANGE_EN          0           // 连接后主动发起FEATURE使能(当前不连接故关闭)
+#define LE_LENGTH_REQ_EN                0           // 连接后主动发起length request使能(当前不连接故关闭)
+
+/*****************************************************************************
+ * Module    : 2.4G遥控器接收功能裁剪配置(蓝牙任务只保留遥控器广播接收)
+ *****************************************************************************/
+#define LE_MASTER_CONNECT_EN            0           // 主机连接目标设备使能(1:搜索连接目标设备并做服务发现订阅; 0:屏蔽,不发起任何连接)
+#define LE_GATT_SVC_EN                  0           // GATT业务服务注册使能(1:注册ble_service下的FF00用户服务/FOTA等; 0:屏蔽;注意gatt_client_init/att_server_init是协议栈事件链路,不受此宏控制)
+#define LE_SLAVE_CONN_NR                0           // 从机连接槽位数量(0:不接受被连接)
+#define RF24G_SCAN_INTERVAL             0x30        // 2.4G遥控器扫描间隔(0x30 * 0.625ms = 30ms)
+#define RF24G_SCAN_WINDOW               0x30        // 2.4G遥控器扫描窗口(与扫描间隔相等即连续扫描,100%占空比)
 
 #define LE_FCC_TEST_EN                  0           //上电直接进FCC，与 FUNC_LE_FCC_EN 共用串口配置
 #define LE_FCC_TEST_HSUART_BAUD         1500000     //波特率

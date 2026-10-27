@@ -4,7 +4,7 @@
 #define INVALID_CONIDX                  (0xff)
 
 #define MAX_MASTER_NR                       2
-#define MAX_SLAVE_NR                        1
+#define MAX_SLAVE_NR                        LE_SLAVE_CONN_NR        // 从机连接槽位数量,见config.h(0:不接受被连接)
 
 #define MAX_BLE_CONNECTIONS                 (MAX_MASTER_NR + MAX_SLAVE_NR)
 

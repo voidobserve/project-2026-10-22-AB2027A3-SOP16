@@ -24,6 +24,8 @@ void user_data_read(void);
 
 void user_init(void);
 void user_main(void);
+void led_thread_start(void);
+bool led_thread_available(void);
 
 #if 0
 void ble_user_server_message_deal(u8 *buffer, u16 len);

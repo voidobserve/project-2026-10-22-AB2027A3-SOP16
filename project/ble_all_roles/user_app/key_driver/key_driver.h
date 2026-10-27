@@ -10,7 +10,8 @@
 enum KEY_EVENT
 {
     KEY_EVENT_NONE = 0,
-    KEY_EVENT_CLICK = 1, // 单击
+    KEY_EVENT_PRESS,
+    KEY_EVENT_CLICK, // 单击
     // KEY_EVENT_DOUBLE_CLICK, // 双击
     // KEY_EVENT_TRIPLE_CLICK, // 三击
     // KEY_EVENT_FOURTH_CLICK, // 四击
@@ -23,8 +24,8 @@ enum KEY_EVENT
 enum KEY_TYPE
 {
     KEY_TYPE_NONE = 0,
-    KEY_TYPE_AD,    // AD按键
-    KEY_TYPE_TOUCH, // 触摸按键
+    KEY_TYPE_IO,         // 机械按键，GPIO检测电平
+    KEY_TYPE_24G_REMOTE, // 2.4G遥控器按键
 };
 
 typedef struct key_driver_para
@@ -57,9 +58,9 @@ typedef struct key_driver_para
     // 存放得到的按键键值和按键事件
     volatile uint8_t latest_key_val;
     volatile uint8_t latest_key_event;
-} key_driver_para_t;
+} key_driver_param_t;
 
-extern void key_driver_scan(void *_scan_para);
+extern void key_driver_scan(key_driver_param_t *_scan_para);
 // extern struct key_driver_para key_driver_scan(struct key_driver_para scan_para);
 
 #endif

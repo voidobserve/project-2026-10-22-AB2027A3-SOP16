@@ -16,10 +16,8 @@
 #define LED_TRANSPORT_BIT1_HIGH_BYTES 7U
 /* 帧间隔 1320 us；1 MHz SPI 下 1 字节 = 8 us，163 字节 = 1304 us，加帧尾 16 us = 1320 us */
 #define LED_TRANSPORT_GAP_BYTES 163U
-/* 在 DMA 结束前提前切 GPIO 高的时间，按 TMR1 的 10 us 分辨率取 30 us */
-// #define LED_TRANSPORT_GAP_SWITCH_MARGIN_US 30U
-/* 在 DMA 结束前提前切 GPIO 高的时间，按 TMR1 的 10 us 分辨率取 500 us，提前 500 us 把 GPIO 切为高电平
-    帧间隔有 1312 us，提前量可以大幅增加，不会切到数据区 */
+/* 在 DMA 结束前提前切 GPIO 高的时间，按 TMR1 的 10 us 分辨率取 500 us
+   帧间隔有 1312 us，提前量可以大幅增加，不会切到数据区 */
 #define LED_TRANSPORT_GAP_SWITCH_MARGIN_US 500U
 /* 实测 TMR1 计数 10 us 对应 1600 个计数（160 MHz 系统时钟） */
 #define LED_TRANSPORT_TMR1_10US_TICKS 1600U
@@ -63,8 +61,9 @@ void led_transport_spi_isr(void)
 
     /* 清 SPI pending，避免中断重复进入 */
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
-    /* 通知主循环本帧发送完成 */
+    /* 通知等待中的 driver 线程：本帧发送完成 */
     led_transport_frame_done = 1;
+    thread_driver_sem_release();
 }
 
 /**
@@ -293,7 +292,6 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
 {
     uint16_t wave_len;  // 编码后的波形字节数
     uint32_t gap_ticks; // TMR1 提前切换计数值
-    uint32_t guard;     // 等待 SPI 完成的超时计数
 
     wave_len = led_transport_encode_frame(frame, led_transport_frame_buf);
 
@@ -302,7 +300,7 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
            LED_TRANSPORT_GAP_BYTES);
     wave_len += LED_TRANSPORT_GAP_BYTES;
 
-    /* 清旧 pending，SPI 完成状态由中断或主循环轮询处理 */
+    /* 清旧 pending，SPI 完成由中断置位并释放 driver 信号量 */
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
     led_transport_frame_done = 0;
 
@@ -315,7 +313,7 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
     spi_it_cmd(SPI1, ENABLE);
 
 #if 1
-    /* TMR1 在 DMA 结束前约 30 us 触发，提前切 GPIO 高 */
+    /* TMR1 在 DMA 结束前约 500 us 触发，提前切 GPIO 高 */
     gap_ticks = led_transport_gap_ticks(wave_len);
     tmr_cmd(TMR1, DISABLE);
     if (gap_ticks > 0U) {
@@ -326,14 +324,11 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
     }
 #endif
 
-    /* SPI 中断优先，轮询作为兜底；超时后强制恢复 */
-    guard = 2000000U;
-    while ((led_transport_frame_done == 0U) &&
-           (spi_get_flag(SPI1, SPI_FLAG_PENDING) == RESET) && (guard > 0U)) {
-        guard--;
-    }
+    /* 阻塞 driver 线程，DMA 期间让蓝牙线程运行 */
+    thread_driver_sem_take();
+
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
-    // tmr_cmd(TMR1, DISABLE);
+    tmr_cmd(TMR1, DISABLE);
     led_transport_spi_set_idle_high();
 }
 

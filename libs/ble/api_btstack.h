@@ -1,6 +1,9 @@
 #ifndef _API_BTSTACK_H
 #define _API_BTSTACK_H
 
+#include <stdint.h>  // uint8_t 等类型定义
+#include <stdbool.h> // bool
+
 //BLE WORK MODE
 typedef enum {
     MODE_NORMAL     = 0,       //normal mode

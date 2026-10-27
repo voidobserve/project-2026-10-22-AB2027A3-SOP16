@@ -2,6 +2,10 @@
 #include "ble_client.h"
 #include "ble_user_service.h"
 
+#include "rf24g_remoter_driver.h"
+
+#if LE_MASTER_CONNECT_EN
+/* 主机连接/服务发现状态机:LE_MASTER_CONNECT_EN=0(只收2.4G遥控器广播)时屏蔽 */
 typedef enum {
     STA_IDLE,
     STA_W4_ENCRYPTED_CONNECTION,
@@ -12,13 +16,16 @@ typedef enum {
     STA_SUBSCRIBED,
     STA_W4_DISCONNECT
 } client_state_t;
+#endif
 
 AT(.com_rodata.svc_info)
 static server_info_t server_info[MAX_BLE_CONNECTIONS];
 
 static att_client_handler_t  client_handler;
 
+#if LE_MASTER_CONNECT_EN
 static client_state_t tc_state[MAX_BLE_CONNECTIONS];
+#endif
 
 server_info_t *ble_get_server_info(uint8_t conidx)
 {
@@ -27,9 +34,13 @@ server_info_t *ble_get_server_info(uint8_t conidx)
 
 void ble_client_event_callback(uint8_t event_type, uint8_t *packet, uint16_t size)
 {
+#if LE_MASTER_CONNECT_EN
     uint8_t conidx = 0;
+#endif
 
     switch(event_type){
+#if LE_MASTER_CONNECT_EN
+        /* 连接/断连/服务发现:主机功能,LE_MASTER_CONNECT_EN=0时屏蔽 */
         case BLE_EVT_CONNECT: {
             uint8_t status = packet[10];
             uint8_t role = packet[9];
@@ -104,6 +115,7 @@ void ble_client_event_callback(uint8_t event_type, uint8_t *packet, uint16_t siz
         case BLE_EVT_CONNECT_PARAM_UPDATE_DONE:
             printf("BLE_EVT_CONNECT_PARAM_UPDATE_DONE\n");
             return;
+#endif /* LE_MASTER_CONNECT_EN */
 
         case BLE_EVT_ADV_REPORT: {
             adv_report_t adv_report;
@@ -111,14 +123,19 @@ void ble_client_event_callback(uint8_t event_type, uint8_t *packet, uint16_t siz
             memcpy(&adv_report, packet, 10);
             adv_report.report = &packet[10];
 
+            /* 2.4G遥控器广播接收:蓝牙任务唯一保留的功能 */
+            rf24g_remoter_data_process(&adv_report);
+#if LE_MASTER_CONNECT_EN
+            /* 搜索并连接目标设备(主机功能,LE_MASTER_CONNECT_EN=0时屏蔽) */
             ble_advertising_report_callback(adv_report);
-
+#endif
         } return;
 
         default:
             break;
     }
 
+#if LE_MASTER_CONNECT_EN
     uint16_t conhdl = (packet[0] | packet[1] << 8);
     conidx = ble_get_conidx(conhdl);
     server_info_t *p_svc_info = &server_info[conidx];
@@ -210,28 +227,35 @@ void ble_client_event_callback(uint8_t event_type, uint8_t *packet, uint16_t siz
         default:
             break;
     }
+#endif /* LE_MASTER_CONNECT_EN */
 }
 
 static uint16_t ble_client_notify_callback (uint16_t con_handle, uint16_t attribute_handle, uint8_t * buffer, uint16_t buffer_size)
 {
+#if LE_MASTER_CONNECT_EN
     printf("ble_client_notify_callback\n");
     print_r(buffer, buffer_size);
+#endif
 
     return 0;
 }
 
 static uint16_t ble_att_read_callback(uint16_t con_handle, uint16_t attribute_handle, uint16_t offset, uint8_t * buffer, uint16_t buffer_size)
 {
+#if LE_MASTER_CONNECT_EN
     printf("attribute_handle:%x\n",attribute_handle);
 
     print_r(buffer, buffer_size);
+#endif
 
     return 0;
 }
 
 void ble_client_init(void)
 {
+#if LE_MASTER_CONNECT_EN
     memset(tc_state, STA_IDLE, sizeof(tc_state));
+#endif
 
     client_handler.event_handler = ble_client_event_callback;
     client_handler.notify_callback = ble_client_notify_callback;

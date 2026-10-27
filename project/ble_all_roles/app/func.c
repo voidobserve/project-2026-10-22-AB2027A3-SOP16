@@ -22,8 +22,10 @@ void func_process(void)
 
     prod_test_process();
 
-  
-    user_main();
+    /* LED 正常由 driver 线程运行；注册失败时退回主循环，避免完全没有灯效 */
+    if (!led_thread_available()) {
+        user_main();
+    }
 }
 
 //func common message process

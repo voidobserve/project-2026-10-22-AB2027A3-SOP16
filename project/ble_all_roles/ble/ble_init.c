@@ -129,8 +129,12 @@ void ble_scan_param_init(void)
     scan_param_t scan_param;
 
     scan_param.scan_type = 1;
-    scan_param.scan_interval = 500;
-    scan_param.scan_window = 250;
+    // 原配置:间隔500(312.5ms)、窗口250(156.25ms),扫描占空比只有50%,会漏掉约一半遥控器包
+    // scan_param.scan_interval = 500;
+    // scan_param.scan_window = 250;
+    // 30ms连续扫描(窗口=间隔,100%占空比),遥控器收包/打印频率最高
+    scan_param.scan_interval = RF24G_SCAN_INTERVAL;
+    scan_param.scan_window = RF24G_SCAN_WINDOW;
     ble_set_scan_param(&scan_param);
     ble_scan_en();
 }
@@ -141,10 +145,16 @@ void ble_all_roles_init(void)
 #if LE_SM_EN
     ble_sm_param_init();
 #endif
+    /* gatt_client_init/att_server_init 是协议栈 HCI 事件链路接线:
+       BLE_EVT_ADV_REPORT(2.4G遥控器广播)由这里的事件处理链分发到
+       att_client_register_handler() 注册的回调,必须始终初始化,不能屏蔽 */
     gatt_client_init();
     gap_random_address_set_mode(GAP_PUBLIC_ADDRESS_TYPE);
     att_server_init(ble_get_profile_data());
+#if LE_GATT_SVC_EN
+    /* ble_service 注册的业务服务(FF00用户服务/FOTA等),只在被连接后才有用 */
     ble_service_init();
+#endif
     ble_client_init();
 
 #if (MAX_SLAVE_NR > 0)

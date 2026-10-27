@@ -25,7 +25,10 @@
                 "${workspaceFolder}/project/ble_all_roles/production_test/iodm",
                 "${workspaceFolder}/project/ble_all_roles/production_test/tbox",
                 "${workspaceFolder}/project/ble_all_roles/user_app",
-                "${workspaceFolder}/project/ble_all_roles/user_app/user_test"
+                "${workspaceFolder}/project/ble_all_roles/user_app/**",
+                "${workspaceFolder}/project/ble_all_roles/user_app/user_test",
+                "${workspaceFolder}/project/ble_all_roles/user_app/rf24g_remoter",
+                "${workspaceFolder}/project/ble_all_roles/user_app/key_dirver"
             ],
             "compilerPath": "C:\\msys64\\mingw64\\bin\\gcc.exe",
             "cStandard": "c17",

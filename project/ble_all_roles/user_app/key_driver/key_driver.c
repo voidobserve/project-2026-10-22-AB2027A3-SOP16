@@ -8,15 +8,13 @@ static volatile uint8_t is_key_active; // 按键是否有效的计数值
 // xdata volatile struct key_driver_para *scan_para; // 要让指针指向xdata区域的全局变量，需要同样将指针变为全局变量
 // 要让指针指向xdata区域的全局变量，需要同样将指针变为全局变量
 volatile struct key_driver_para *scan_para;
-// void key_driver_scan(void *_scan_para)
-struct key_driver_para key_driver_scan(struct key_driver_para *_scan_para)
+void key_driver_scan(key_driver_param_t *_scan_para)
 {
 
 #if 1
     uint8_t key_event = KEY_EVENT_NONE; // 存放待发送的按键事件
     uint8_t cur_key_value = NO_KEY;     // 存放待发送的按键键值
     uint8_t key_value = NO_KEY;
-
 
     scan_para = (struct key_driver_para *)_scan_para;
 
@@ -89,40 +87,36 @@ struct key_driver_para key_driver_scan(struct key_driver_para *_scan_para)
         // printf("key event up\n");
 
         if (cur_key_value == NO_KEY) {
-            if (scan_para->press_cnt >=
-                scan_para->long_time) { // 长按/HOLD状态之后被按键抬起;
+            if (scan_para->press_cnt >= scan_para->long_time) {
+                // 长按/HOLD状态之后被按键抬起;
                 key_event = KEY_EVENT_UP;
                 key_value = scan_para->last_key;
                 goto _notify; // 发送抬起消息
-                // key_scan_status = KEY_SCAN_STATUS_TO_NOTIFY; // 跳转到发送按键事件的操作
             }
 
-            // if (KEY_SCAN_STATUS_NONE == key_scan_status) // 如果没有特殊操作
-            {
-                scan_para->click_delay_cnt = 1; // 按键等待下次连击延时开始
-            }
+            scan_para->click_delay_cnt = 1; // 按键等待下次连击延时开始
         } else {
             /*
                 如果当前的键值不为空，上一次的键值又与当前的键值不一样，说明按键按下
                 cur_key = valid_key, last_key = NO_KEY -> 按键被按下
             */
-            scan_para->press_cnt =
-                1; // 用于判断long和hold事件的计数器重新开始计时;
-            if (cur_key_value !=
-                scan_para
-                    ->notify_value) { // 第一次单击/连击时按下的是不同按键, 单击次数重新开始计数
+            // 用于判断long和hold事件的计数器重新开始计时;
+            scan_para->press_cnt = 1;
+            if (cur_key_value != scan_para->notify_value) {
+                // 第一次单击/连击时按下的是不同按键, 单击次数重新开始计数
                 scan_para->click_cnt = 1;
                 scan_para->notify_value = cur_key_value;
+
+                key_event = KEY_EVENT_PRESS;
+                scan_para->press_cnt++;
+                key_value = cur_key_value;
+                goto _notify;
             } else {
                 scan_para->click_cnt++; // 单击次数累加
             }
         }
 
         goto _scan_end; // 返回, 等待延时时间到
-        // if (KEY_SCAN_STATUS_NONE == key_scan_status)
-        // {
-        //     key_scan_status = KEY_SCAN_STATUS_TO_END_OF_SCAN; // 返回, 等待延时时间到
-        // }
     } else {
         /*
             如果当前获取的键值与上次获取的键值一样，说明按键在长按或是按键未按下
@@ -162,15 +156,13 @@ struct key_driver_para key_driver_scan(struct key_driver_para *_scan_para)
                     key_value = scan_para->notify_value;
 
                     goto _notify;
-                    // key_scan_status = KEY_SCAN_STATUS_TO_NOTIFY;
-                } else { // 按键抬起后等待下次延时时间未到
+                } else {
+                    // 按键抬起后等待下次延时时间未到
                     scan_para->click_delay_cnt++;
                     goto _scan_end; // 按键抬起后延时时间未到, 返回
-                    // key_scan_status = KEY_SCAN_STATUS_TO_END_OF_SCAN;
                 }
             } else {
                 goto _scan_end; // 没有按键需要处理
-                // key_scan_status = KEY_SCAN_STATUS_TO_END_OF_SCAN;
             }
         } else {
             // last_key = valid_key; cur_key = valid_key, press_cnt累加用于判断long和hold
@@ -188,45 +180,39 @@ struct key_driver_para key_driver_scan(struct key_driver_para *_scan_para)
                 // printf("key event long\n");
             } else if (scan_para->press_cnt == scan_para->hold_time) {
                 key_event = KEY_EVENT_HOLD;
-                scan_para->press_cnt =
-                    scan_para
-                        ->long_time; // 下一次scan_para->press_cnt++,还是会进入到这里
+                // 下一次scan_para->press_cnt++,还是会进入到这里
+                scan_para->press_cnt = scan_para->long_time;
                 // printf("key event hold\n");
             } else {
                 goto _scan_end; // press_cnt没到长按和HOLD次数, 返回
-                // key_scan_status = KEY_SCAN_STATUS_TO_END_OF_SCAN;
             }
 
             // press_cnt没到长按和HOLD次数, 发消息
             key_value = cur_key_value;
             goto _notify;
-            // key_scan_status = KEY_SCAN_STATUS_TO_NOTIFY;
         }
     }
 
 _notify:
 
-    // if (KEY_SCAN_STATUS_TO_END_OF_SCAN != key_scan_status)
-    {
-        // if (KEY_TYPE_AD == scan_para->key_type) // 如果是ad按键
-        {
-            scan_para->click_cnt = 0;         // 按下次数清0
-            scan_para->notify_value = NO_KEY; // 在延时的待发送按键值清零
+    // USER_TO_DO 根据按键类型，更新按键键值和事件
+    if (KEY_TYPE_24G_REMOTE == scan_para->key_type) {
+        // 如果是2.4G遥控按键
 
-            scan_para->latest_key_val = key_value;   // 存放得到的按键键值
-            scan_para->latest_key_event = key_event; // 存放得到的按键事件
+        scan_para->click_cnt = 0;         // 按键按下次数清0
+        scan_para->notify_value = NO_KEY; // 在延时的待发送按键值清零
 
-            // printf("notify\n");
-        }
-        // else if (KEY_TYPE_TOUCH == scan_para->key_type) // 如果是触摸按键
-        // {
-        //     scan_para->click_cnt = 0;         // 按下次数清0
-        //     scan_para->notify_value = NO_KEY; // 在延时的待发送按键值清零
-
-        //     scan_para->latest_key_val = key_value;   // 存放得到的按键键值
-        //     scan_para->latest_key_event = key_event; // 存放得到的按键事件
-        // }
+        scan_para->latest_key_val = key_value;   // 存放得到的按键键值
+        scan_para->latest_key_event = key_event; // 存放得到的按键事件
     }
+    // else if (KEY_TYPE_TOUCH == scan_para->key_type) // 如果是触摸按键
+    // {
+    //     scan_para->click_cnt = 0;         // 按下次数清0
+    //     scan_para->notify_value = NO_KEY; // 在延时的待发送按键值清零
+
+    //     scan_para->latest_key_val = key_value;   // 存放得到的按键键值
+    //     scan_para->latest_key_event = key_event; // 存放得到的按键事件
+    // }
 
 _scan_end:
     scan_para->last_key = cur_key_value;

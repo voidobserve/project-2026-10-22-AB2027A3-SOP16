@@ -91,19 +91,21 @@ void ble_conn_state_set(uint8_t state, uint8_t conidx, uint8_t role)
     ble_adv_scan_state_correct();
 }
 
+#if LE_MASTER_CONNECT_EN
 /**
  * @brief 扫描到广播包时的回调（本工程的核心逻辑：搜索目标设备并主动发起连接）
  *
  * 处理流程：
- *  1. 调试输出：广播数据以 0x10 0xFF 开头的视为客户遥控器的厂商自定义广播，打印出来便于调试；
- *  2. 逐条解析广播数据里的 AD 结构（LTV：len + type + data），查找“完整本地名称”
- *     （AD Type = 0x09）为 "LE_AB2020" 的目标设备；
- *  3. 找到目标设备后，本机作为主机（Central）按其地址主动发起 BLE 连接。
+ *  1. 逐条解析广播数据里的 AD 结构（LTV：len + type + data），查找“完整本地名称”
+ *     （AD Type = 0x09）为 "LE_AB2020" 的目标设备（客户遥控器广播包的打印由
+ *     rf24g_remoter_data_process() 统一处理，这里不重复打印）；
+ *  2. 找到目标设备后，本机作为主机（Central）按其地址主动发起 BLE 连接。
  *
  * @param adv_report 一条扫描到的广播报告（含广播者地址、地址类型、广播数据、RSSI 等）
  */
 void ble_advertising_report_callback(adv_report_t adv_report)
 {
+    // 客户遥控器广播包(0x10 0xFF开头)的打印统一在 rf24g_remoter_data_process() 里处理,这里不重复打印
     // if (adv_report.rssi >= -40) {
     //     printf("evt_type %x, addr_type %x, Adv Addr:", adv_report.event_type,
     //            adv_report.addr_type);
@@ -112,17 +114,6 @@ void ble_advertising_report_callback(adv_report_t adv_report)
     //     print_r(adv_report.report, adv_report.report_len);
     //     printf("adv_report.rssi == %d\n", (int16_t)adv_report.rssi);
     // }
-
-    // 客户的遥控器：广播数据前两字节为 0x10 0xFF（厂商自定义广播格式）时打印出来调试
-    if (adv_report.report_len >= 10 && adv_report.report[0] == 0x10 &&
-        adv_report.report[1] == 0xFF) {
-        printf("evt_type %x, addr_type %x, Adv Addr:", adv_report.event_type,
-               adv_report.addr_type);
-        print_r(adv_report.addr, 6);
-        printf("Adv Data: %d###", adv_report.report_len);
-        print_r(adv_report.report, adv_report.report_len);
-        printf("adv_report.rssi == %d\n", (int)(int8_t)adv_report.rssi);
-    }
 
     // 目标设备名：只连接广播中名字为 "LE_AB2020" 的设备
     uint8_t con_dev_name1[] = "LE_AB2020";
@@ -161,7 +152,7 @@ void ble_advertising_report_callback(adv_report_t adv_report)
                 // 发起连接期间暂时关闭本机广播，防止在此期间被其他设备（手机）连入，
                 // 本机同时支持从机角色，不关广播可能被抢占一条连接槽位。
                 if (adv_is_en) {
-                    delay_ms(2);      // 等待广播真正停止
+                    delay_ms(2); // 等待广播真正停止
                     ble_adv_dis();
                 }
 #endif
@@ -203,3 +194,4 @@ void ble_advertising_report_callback(adv_report_t adv_report)
         offset += beacon_ltv->len + 1; // 跳到下一个 AD 结构
     }
 }
+#endif /* LE_MASTER_CONNECT_EN */
