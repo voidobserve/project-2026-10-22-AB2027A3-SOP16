@@ -5,8 +5,8 @@
 static volatile u8 flag_rf24g_key_val_update = 0; // 是否收到了新的数据
 volatile u8 rf24g_key_val = NO_KEY;               // 存放按键键值
 
-volatile u8 rf24g_key_driver_event = 0; // 由key_driver_scan() 更新
-volatile u8 rf24g_key_driver_value = 0; // 由key_driver_scan() 更新
+// volatile u8 rf24g_key_driver_event = 0; // 由key_driver_scan() 更新
+// volatile u8 rf24g_key_driver_value = 0; // 由key_driver_scan() 更新
 
 // 获取按键键值的函数声明
 static uint8_t get_key_value(void);

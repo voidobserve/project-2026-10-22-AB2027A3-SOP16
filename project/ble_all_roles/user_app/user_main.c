@@ -1,13 +1,24 @@
+/*
+ * 文件说明：
+ * 用户应用入口。当前版本中 user_main() 由 LED driver 线程循环调用，
+ * 负责按键扫描、应用层轮询和逐灯发送 LED 帧。
+ */
+
 #include "user_config.h"
 #include "driver_uart.h"
 #include "driver_tmr.h"
 #include "led_driver/led_transport_spi.h"
 #include "led_driver/led_protocol.h"
 #include "led_driver/led_animation.h"
+#include "led_app.h"
 
 #include "key_driver.h"
 #include "rf24g_remoter_driver.h"
 #include "rf24g_remoter_apply.h"
+
+#include "io_key_driver.h"
+#include "io_key_apply.h"
+
 
 // #include "driver_gpio.h" // 初始化 测试时使用的gpio，需要引用该头文件
 
@@ -24,8 +35,20 @@ void timer3_isq(void)
     if (tmr_get_flag(TMR3, TMR_IT_UPDATE) != RESET) {
         tmr_clear_flag(TMR3, TMR_IT_UPDATE);
         led_timer_tick++;
+
+        // 2.4G遥控器按键扫描的计时器
         if (rf24g_scan_para.cur_scan_times < UINT8_MAX) {
             rf24g_scan_para.cur_scan_times++;
+        }
+
+        // io按键扫描的定时器
+        if (io_scan_param.cur_scan_times < UINT8_MAX) {
+            io_scan_param.cur_scan_times++;
+        }
+
+        /* 关灯后让 driver 线程每 1 ms 阻塞等待，避免高优先级空转压住蓝牙 */
+        if (led_app_off_interrupt_flag != 0U) {
+            thread_driver_sem_release();
         }
 
         // TEST ONLY
@@ -137,34 +160,19 @@ void user_data_read(void)
 // 初始化函数，在 bsp_sys.c -> bsp_sys_init() 中调用
 void user_init(void)
 {
-#if 0
-    user_data_read(); // 读取flash保存的数据
-    if (user_data.valid != USER_DATA_VALID_VAL) {
-        // 如果读出来的数据，校验不通过，说明是第一次上电
-        // 初始化变量
-        user_data.valid = USER_DATA_VALID_VAL;
-
-        user_data_write(); // 将数据写回flash
-#if USER_DEBUG_ENABLE
-        my_printf("is first pwr on\n");
-#endif
-    } else {
-#if USER_DEBUG_ENABLE
-        my_printf("is not first pwr on\n");
-#endif
-    }
-#endif
-
 #if USER_DEBUG_ENABLE
     user_debug_io_init();
 #endif
 
+    io_key_init();
+
     led_transport_spi_init();
     led_transport_spi_frame_init();
     led_protocol_init();
-    led_anim_init(0);
-    led_anim_set_mode(LED_ANIM_FADE, 0);
     tmr3_init();
+
+    /* 读取 NVM，恢复开关/模式/颜色，并初始化动画状态 */
+    led_app_init(led_timer_tick);
 
     /* 注册 driver 线程回调；蓝牙开启时等蓝牙初始化完成后再启动 */
     led_thread_registered = (uint8_t)thread_driver_user_callback_register(
@@ -192,13 +200,30 @@ void ble_user_server_message_deal(u8 *buff, u16 len)
 // 会循环投递，所以该函数内部不用写 while(1)
 void user_main(void)
 {
-    uint32_t now;                   // 当前 1 ms 时间
-    uint8_t lamp_idx;               // 当前灯号
-    led_color_t color;              // 当前灯颜色
-    uint8_t frame[LED_FRAME_BYTES]; // 协议帧
+    uint32_t current_time_ms;                 // 当前 1 ms 时间
+    uint8_t current_lamp_index;               // 当前要发送的灯号
+    led_color_t lamp_color;                   // 当前灯最终颜色
+    uint8_t protocol_frame[LED_FRAME_BYTES];  // 协议帧
 
+    current_time_ms = led_timer_tick;
+    led_app_set_current_time_ms(current_time_ms);
+
+    /* 2.4G 遥控器按键扫描与业务处理 */
     key_driver_scan(&rf24g_scan_para);
     rf24g_remoter_apply();
+
+    /* 机械按键扫描与业务处理；机械按键代码由用户维护 */
+    key_driver_scan(&io_scan_param);
+    io_key_apply();
+
+    /* timer 到点、NVM 延迟保存；关灯状态下也必须执行 */
+    led_app_poll(current_time_ms);
+
+    if (!led_app_power_is_on()) {
+        /* TMR3 每 1 ms 释放一次信号量，driver 线程在这里让出 CPU */
+        thread_driver_sem_take();
+        return;
+    }
 
 #if 1
     led_transport_spi_frame_poll();
@@ -207,12 +232,11 @@ void user_main(void)
         return;
     }
 
-    now = led_timer_tick;
-    lamp_idx = led_protocol_current_lamp();
-    led_anim_get_lamp_color(now, lamp_idx, &color);
-    led_protocol_build_frame(lamp_idx, &color, frame);
+    current_lamp_index = led_protocol_current_lamp();
+    led_app_get_lamp_color(current_time_ms, current_lamp_index, &lamp_color);
+    led_protocol_build_frame(current_lamp_index, &lamp_color, protocol_frame);
 
-    led_transport_spi_frame_submit(frame);
+    led_transport_spi_frame_submit(protocol_frame);
 
     led_protocol_advance_lamp();
 #endif

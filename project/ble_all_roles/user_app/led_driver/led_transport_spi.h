@@ -47,6 +47,21 @@ void led_transport_spi_frame_submit(const uint8_t *frame);
 void led_transport_spi_frame_poll(void);
 
 /**
+ * @brief 关闭 LED 输出：停 TMR1/SPI，PA3 持续低
+ */
+void led_transport_spi_power_off(void);
+
+/**
+ * @brief 打开 LED 输出：PA3 空闲高，等待稳定后恢复发帧
+ */
+void led_transport_spi_power_on(void);
+
+/**
+ * @brief 查询 LED 输出是否处于开灯状态
+ */
+bool led_transport_spi_is_power_on(void);
+
+/**
  * @brief 测试函数：发送 12 盏灯的静态颜色数据
  * @param 无
  * @return 无

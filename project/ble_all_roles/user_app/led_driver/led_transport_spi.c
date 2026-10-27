@@ -1,3 +1,9 @@
+/*
+ * 文件说明：
+ * LED 灯串的 SPI/DMA 传输层。负责把 6 字节协议帧编码成
+ * “低电平 + 高电平”波形，并在关灯时把 PA3 保持为低电平。
+ */
+
 #include "led_transport_spi.h"
 #include "include.h"
 #include "driver_gpio.h"
@@ -26,7 +32,7 @@
 /* 单帧波形最大字节数：48 bit × (1 低 + 7 高) + 帧尾 2 字节 = 386 */
 #define LED_TRANSPORT_WAVE_MAX_BYTES 386U
 /* 单帧缓冲最大字节数：386 + 163 = 549 */
-#define LED_TRANSPORT_FRAME_BUF_BYTES 549U
+#define LED_TRANSPORT_FRAME_BUFFER_BYTES 549U
 /* 低电平字节值：0x00 持续 8 bit，即 8 us */
 #define LED_TRANSPORT_LOW_BYTE 0x00U
 /* 高电平字节值：0xFF 持续 8 bit，即 8 us */
@@ -40,10 +46,11 @@
 #define TEST_LED_COUNT 12U
 
 /* 单帧 SPI 波形缓冲区，静态分配，避免动态内存 */
-static uint8_t led_transport_frame_buf[LED_TRANSPORT_FRAME_BUF_BYTES];
+static uint8_t led_transport_frame_buffer[LED_TRANSPORT_FRAME_BUFFER_BYTES];
 
-volatile uint32_t spi_isr_cnt; // SPI 完成中断进入次数，调试用
-static volatile uint8_t led_transport_frame_done; // 单帧发送完成标志
+volatile uint32_t spi_interrupt_count; // SPI 完成中断进入次数，调试用
+static volatile uint8_t led_transport_frame_complete_flag; // 单帧发送完成标志
+static volatile uint8_t led_transport_power_on_flag = 1U; // 1: 开灯输出, 0: 控制脚低
 
 /**
  * @brief SPI DMA 完成中断
@@ -57,12 +64,12 @@ void led_transport_spi_isr(void)
 #if USER_DEBUG_ENABLE
     // USER_DEBUG_IO_TOGGLE(); // 调试：确认 SPI 中断是否每帧进入一次
 #endif
-    spi_isr_cnt++; // 记录中断次数
+    spi_interrupt_count++; // 记录中断次数
 
     /* 清 SPI pending，避免中断重复进入 */
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
     /* 通知等待中的 driver 线程：本帧发送完成 */
-    led_transport_frame_done = 1;
+    led_transport_frame_complete_flag = 1;
     thread_driver_sem_release();
 }
 
@@ -128,6 +135,42 @@ static void led_transport_spi_set_spi_output(void)
 {
     LED_TRANSPORT_GPIO_PORT->fdir |= (uint32_t)LED_TRANSPORT_GPIO_PIN;
     LED_TRANSPORT_GPIO_PORT->fen |= (uint32_t)LED_TRANSPORT_GPIO_PIN;
+}
+
+/**
+ * @brief 关闭 LED 输出：停 TMR1/SPI 中断，PA3 持续低
+ */
+void led_transport_spi_power_off(void)
+{
+    spi_it_cmd(SPI1, DISABLE);
+    tmr_cmd(TMR1, DISABLE);
+    spi_clear_flag(SPI1, SPI_FLAG_PENDING);
+    led_transport_frame_complete_flag = 0U;
+
+    /* 先输出低，再保持 GPIO 输出；关灯期间不能有空闲高 */
+    LED_TRANSPORT_GPIO_PORT->io_clr = (uint32_t)LED_TRANSPORT_GPIO_PIN;
+    LED_TRANSPORT_GPIO_PORT->fdir &= ~(uint32_t)LED_TRANSPORT_GPIO_PIN;
+    LED_TRANSPORT_GPIO_PORT->fen &= ~(uint32_t)LED_TRANSPORT_GPIO_PIN;
+    led_transport_power_on_flag = 0U;
+}
+
+/**
+ * @brief 打开 LED 输出：PA3 空闲高，等待稳定后恢复发帧
+ */
+void led_transport_spi_power_on(void)
+{
+    led_transport_power_on_flag = 1U;
+    led_transport_spi_set_idle_high();
+    /* 保证第一帧前空闲高稳定，避免被灯串芯片当成数据位 */
+    delay_us(LED_TRANSPORT_INIT_IDLE_US);
+}
+
+/**
+ * @brief 查询 LED 输出是否处于开灯状态
+ */
+bool led_transport_spi_is_power_on(void)
+{
+    return (led_transport_power_on_flag != 0U);
 }
 
 /**
@@ -210,6 +253,7 @@ void led_transport_spi_init(void)
     gpio_init_struct.gpio_drv = GPIO_DRV_6MA;
     gpio_init(LED_TRANSPORT_GPIO_PORT, &gpio_init_struct);
     gpio_set_bits(LED_TRANSPORT_GPIO_PORT, LED_TRANSPORT_GPIO_PIN);
+    led_transport_power_on_flag = 1U;
 
     /* 映射只配置一次；后面只切 FEN/FDIR，不重复清/写映射 */
     gpio_func_mapping_config(LED_TRANSPORT_GPIO_PORT, LED_TRANSPORT_GPIO_PIN,
@@ -236,7 +280,7 @@ void led_transport_spi_init(void)
 
     /* dummy 字节结束后再注册 SPI 中断，避免它触发一次假完成 */
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
-    led_transport_frame_done = 0;
+    led_transport_frame_complete_flag = 0;
     /* SPI 完成中断优先级必须为 0，与 TMR1/TMR3 保持一致 */
     spi_pic_config(SPI1, led_transport_spi_isr, 0, ENABLE);
 
@@ -268,6 +312,7 @@ void led_transport_spi_init(void)
  */
 void led_transport_spi_frame_init(void)
 {
+    led_transport_power_on_flag = 1U;
     led_transport_spi_set_idle_high();
 }
 
@@ -279,7 +324,7 @@ void led_transport_spi_frame_init(void)
  */
 bool led_transport_spi_frame_ready(void)
 {
-    return true;
+    return (led_transport_power_on_flag != 0U);
 }
 
 /**
@@ -293,23 +338,27 @@ void led_transport_spi_frame_submit(const uint8_t *frame)
     uint16_t wave_len;  // 编码后的波形字节数
     uint32_t gap_ticks; // TMR1 提前切换计数值
 
-    wave_len = led_transport_encode_frame(frame, led_transport_frame_buf);
+    if (led_transport_power_on_flag == 0U) {
+        return;
+    }
+
+    wave_len = led_transport_encode_frame(frame, led_transport_frame_buffer);
 
     /* 帧间隔也放进 DMA，由 0xFF 字节产生高电平 */
-    memset(&led_transport_frame_buf[wave_len], LED_TRANSPORT_HIGH_BYTE,
+    memset(&led_transport_frame_buffer[wave_len], LED_TRANSPORT_HIGH_BYTE,
            LED_TRANSPORT_GAP_BYTES);
     wave_len += LED_TRANSPORT_GAP_BYTES;
 
     /* 清旧 pending，SPI 完成由中断置位并释放 driver 信号量 */
     spi_clear_flag(SPI1, SPI_FLAG_PENDING);
-    led_transport_frame_done = 0;
+    led_transport_frame_complete_flag = 0;
 
     led_transport_spi_set_spi_output();
 
     spi_dir_sel(SPI1, SPI_DIR_TX);
-    spi_set_dma_addr(SPI1, (uint32_t)led_transport_frame_buf);
+    spi_set_dma_addr(SPI1, (uint32_t)led_transport_frame_buffer);
     spi_set_dma_cnt(SPI1, (uint32_t)wave_len);
-    /* 使能 SPI 中断，等待 DMA 完成中断置 frame_done */
+    /* 使能 SPI 中断，等待 DMA 完成中断置完成标志 */
     spi_it_cmd(SPI1, ENABLE);
 
 #if 1

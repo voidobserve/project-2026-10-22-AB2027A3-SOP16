@@ -111,8 +111,8 @@ enum
 typedef void (*rf24_key_handle_func_t)(void);
 
 extern volatile key_driver_param_t rf24g_scan_para;
-extern volatile uint8_t rf24g_key_driver_value;
-extern volatile uint8_t rf24g_key_driver_event;
+// extern volatile uint8_t rf24g_key_driver_value;
+// extern volatile uint8_t rf24g_key_driver_event;
 // extern const rf24_key_handle_func_t rf24_28keys_handle_func_buff[RF24G_28_KEY_EVENT_MAX];
 
 void rf24g_remoter_data_process(adv_report_t *adv_report);

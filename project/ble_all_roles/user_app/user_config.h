@@ -9,12 +9,17 @@
 
 // 校验，用于验证是不是第一次上电，之前写入的数据是否有效
 #define USER_DATA_VALID_VAL        0xC5
+#define USER_DATA_VERSION          1
 #define USER_DATA_SAVE_INTERVAL_MS 2000 // 每次保存数据的间隔时间
 
 // 需要掉电保存的数据
 typedef struct __attribute__((packed))
 {
-    u8 valid; // 校验，用于验证是不是第一次上电，之前写入的数据是否有效
+    u8 valid;   // 校验，用于验证是不是第一次上电，之前写入的数据是否有效
+    u8 version; // 数据结构版本
+    u8 power;   // 0: 关灯, 1: 开灯
+    u8 mode;    // led_animation_mode_t
+    u8 color;   // 静态色/图标索引
 } user_data_t;
 
 extern volatile user_data_t user_data;

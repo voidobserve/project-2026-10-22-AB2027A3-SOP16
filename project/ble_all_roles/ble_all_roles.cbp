@@ -16,6 +16,7 @@
 					<Add directory="user_app/user_test" />
 					<Add directory="user_app/rf24g_remoter" />
 					<Add directory="user_app/key_driver" />
+					<Add directory="user_app/io_key" />
 				</Compiler>
 			</Target>
 		</Build>
@@ -356,10 +357,22 @@
 		<Unit filename="strong_symbol.c">
 			<Option compilerVar="CC" />
 		</Unit>
+		<Unit filename="user_app/io_key/io_key_apply.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="user_app/io_key/io_key_apply.h" />
+		<Unit filename="user_app/io_key/io_key_driver.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="user_app/io_key/io_key_driver.h" />
 		<Unit filename="user_app/key_driver/key_driver.c">
 			<Option compilerVar="CC" />
 		</Unit>
 		<Unit filename="user_app/key_driver/key_driver.h" />
+		<Unit filename="user_app/led_app.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="user_app/led_app.h" />
 		<Unit filename="user_app/led_driver/led_animation.c">
 			<Option compilerVar="CC" />
 		</Unit>
@@ -372,6 +385,10 @@
 			<Option compilerVar="CC" />
 		</Unit>
 		<Unit filename="user_app/led_driver/led_transport_spi.h" />
+		<Unit filename="user_app/rf24g_remoter/rf24g_remoter_apply.c">
+			<Option compilerVar="CC" />
+		</Unit>
+		<Unit filename="user_app/rf24g_remoter/rf24g_remoter_apply.h" />
 		<Unit filename="user_app/rf24g_remoter/rf24g_remoter_driver.c">
 			<Option compilerVar="CC" />
 		</Unit>
