@@ -1,7 +1,7 @@
 #include "led_protocol.h"
 
 /* 当前灯号游标：0~11，对应灯号 1~12 */
-static uint8_t s_lamp_cursor;
+static uint8_t lamp_cursor_index;
 
 /**
  * @brief 初始化协议层
@@ -11,7 +11,7 @@ static uint8_t s_lamp_cursor;
  */
 void led_protocol_init(void)
 {
-    s_lamp_cursor = 0;
+    lamp_cursor_index = 0;
 }
 
 /**
@@ -21,7 +21,7 @@ void led_protocol_init(void)
  */
 uint8_t led_protocol_current_lamp(void)
 {
-    return (uint8_t)(s_lamp_cursor + 1U);
+    return (uint8_t)(lamp_cursor_index + 1U);
 }
 
 /**
@@ -52,5 +52,5 @@ void led_protocol_build_frame(uint8_t lamp_idx, const led_color_t *color,
  */
 void led_protocol_advance_lamp(void)
 {
-    s_lamp_cursor = (uint8_t)((s_lamp_cursor + 1U) % LED_LAMP_COUNT);
+    lamp_cursor_index = (uint8_t)((lamp_cursor_index + 1U) % LED_LAMP_COUNT);
 }

@@ -37,6 +37,9 @@ void led_app_power_toggle(uint32_t now_ms);
 /* 机械按键开灯入口；应在 LED driver 线程/用户主循环中调用 */
 void led_app_power_on_external(uint32_t now_ms);
 
+/* 机械按键 CLICK：索引 0~19，19 关灯；索引 0 为白光 */
+void led_app_mechanical_next(uint32_t now_ms);
+
 /* 模式/颜色 */
 void led_app_set_mode(led_animation_mode_t mode, uint32_t now_ms);
 void led_app_set_static_color(uint8_t color_index, uint32_t now_ms);

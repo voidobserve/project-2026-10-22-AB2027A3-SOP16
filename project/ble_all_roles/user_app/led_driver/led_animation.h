@@ -21,7 +21,33 @@ typedef enum {
     LED_ANIMATION_MODE_MODES,
     LED_ANIMATION_MODE_ICON,
     LED_ANIMATION_MODE_WHITE_SELECT,
+    LED_ANIMATION_MODE_MECHANICAL,
 } led_animation_mode_t;
+
+/* 机械按键的 20 个模式索引 */
+typedef enum {
+    LED_MECHANICAL_WHITE_100 = 0, // 白光 W254
+    LED_MECHANICAL_WHITE_60,      // 白光 W149
+    LED_MECHANICAL_WHITE_20,      // 白光 W49
+    LED_MECHANICAL_FADE,
+    LED_MECHANICAL_RED,
+    LED_MECHANICAL_GREEN,
+    LED_MECHANICAL_BLUE,
+    LED_MECHANICAL_YELLOW,
+    LED_MECHANICAL_MAGENTA,
+    LED_MECHANICAL_PINK,
+    LED_MECHANICAL_ORANGE,
+    LED_MECHANICAL_CYAN,
+    LED_MECHANICAL_RED_GREEN_ALTERNATE,
+    LED_MECHANICAL_CLOVER,
+    LED_MECHANICAL_PUMPKIN,
+    LED_MECHANICAL_RED_GREEN_WHITE,
+    LED_MECHANICAL_RED_BLUE_WHITE,
+    LED_MECHANICAL_SEVEN_COLOR_RING,
+    LED_MECHANICAL_HIGH_CHANGE,
+    LED_MECHANICAL_OFF,
+    LED_MECHANICAL_MODE_COUNT
+} led_mechanical_mode_t;
 
 /* 15 种静态单色，顺序与 NVM 的 color 字段一致 */
 typedef enum {
@@ -90,6 +116,13 @@ void led_animation_set_icon(uint8_t icon_index);
 /* 设置 White Select 颜色索引，索引会限幅 */
 void led_animation_set_white_color_index(uint8_t white_color_index);
 uint8_t led_animation_get_white_color_index(void);
+
+/* 设置/读取机械按键模式索引；索引不写 NVM */
+void led_animation_set_mechanical_index(uint8_t mechanical_index);
+uint8_t led_animation_get_mechanical_index(void);
+
+/* 当前机械索引是否需要乘全局亮度；0~2 是固定白光亮度，不乘 */
+bool led_animation_mechanical_uses_global_brightness(void);
 
 /* 进入 Modes：从索引 0 彩虹开始 */
 void led_animation_modes_enter(uint32_t now_ms);

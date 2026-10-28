@@ -1,64 +1,203 @@
 # LED 三层架构与调用逻辑
 
-本文档描述当前 LED 灯串程序的三个层次：**动画层、协议层、传输层**，以及它们的调用层次、调用顺序、数据流和时序约束。
+本文以当前工程代码为准，描述 LED 灯串程序的**输入层、应用层、动画层、协议层、传输层**，以及调用顺序、数据流、电源/亮度/NVM/Timer 行为和时序约束。
 
-> **必须遵守的两条硬约束**
->
-> 1. **TMR1、TMR3、SPI 中断优先级必须都为 0**，不能把 TMR1 设为 1。TMR1 设为 1 会压住 TMR3，导致 1 ms 时基不到来，fade 动画停住，也可能影响 SPI 完成中断。
-> 2. **灯串控制信号空闲时不能有负脉冲**。帧间隔 1312 us 高电平之后必须直接接下一帧的 8~9 us 低电平，中间不能出现 0.5 us 等任何低脉冲，否则灯串可能误判并闪烁。
+> 早期文档里的 `led_anim_*`、`led_anim_mode_t` 已废弃；当前代码统一使用 `led_animation_*`、`led_animation_mode_t`。
 
 ---
 
-## 1. 设计目标
+## 0. 必须遵守的硬约束
 
-- 动画层只负责“当前时间每盏灯应该是什么颜色”；
-- 协议层只负责“把灯号和颜色组成协议帧”；
-- 传输层只负责“把协议帧变成 SPI 波形并保证帧间隔”；
-- 三层之间通过简单的数据结构和函数调用连接，不互相直接访问外设寄存器；
-- 灯号 1~12 持续循环，颜色/动画/模式切换不能复位灯号；
-- 模式切换在下一帧生效；
-- 不使用动态内存、不使用递归，中断尽量短。
+1. **TMR1、TMR3、SPI 中断优先级必须都为 0**，不能把 TMR1 设为 1。
+2. **灯串控制信号空闲时不能有负脉冲**。帧间隔高电平后必须直接接下一帧的 8~9 us 低电平，中间不能出现 0.5 us 等低脉冲。
+3. 动画、应用层不在中断里执行；中断只做计数、引脚切换、置标志。
+4. 不使用动态内存，不使用递归；所有缓冲区静态分配。
 
 ---
 
-## 2. 三层职责
+## 1. 分层
 
 | 层次 | 文件 | 主要职责 | 不负责 |
 |---|---|---|---|
-| 动画层 | `led_animation.c/.h` | 按绝对时间计算每盏灯的 RGBW | SPI、协议帧、灯号循环 |
-| 协议层 | `led_protocol.c/.h` | 灯号游标、组帧、校验 | 颜色渐变、SPI 波形 |
-| 传输层 | `led_transport_spi.c/.h` | SPI 初始化、波形编码、DMA、帧间隔、空闲高电平 | 颜色含义、灯号选择 |
-| 应用/调度 | `user_main.c` | 1 ms 时基、逐帧调用三层 | 具体波形和协议细节 |
+| 输入层 | `key_driver.c`、`rf24g_remoter_driver.c`、`io_key_driver.c` | 扫描 2.4G 按键、机械按键，产生 CLICK/PRESS 事件 | 颜色、电源、NVM |
+| 应用层 | `led_app.c/.h` | 电源、亮度、模式、Timer、NVM、机械索引、逐灯最终输出 | SPI 波形、协议位序 |
+| 动画层 | `led_animation.c/.h` | 按绝对时间/机械索引计算每盏灯 100% 基准 RGBW | 协议帧、SPI、按键 |
+| 协议层 | `led_protocol.c/.h` | 灯号游标、6 字节组帧、累加和校验 | 颜色渐变、SPI 波形 |
+| 传输层 | `led_transport_spi.c/.h` | SPI/DMA、波形编码、帧间隔、PA3 空闲高、关灯低 | 颜色含义、灯号选择 |
+| 调度 | `user_main.c` | 1 ms 时基、按键扫描、应用层轮询、逐帧发送 | 具体颜色/协议细节 |
 
 ---
 
-## 3. 主要接口
+## 2. 总体调用链
 
-公共类型：
+```text
+TMR3 1 ms
+  → led_timer_tick++
 
-```c
-#define LED_LAMP_COUNT 12U
-#define LED_FRAME_BYTES 6U
+user_main()
+  → led_app_set_current_time_ms(led_timer_tick)
 
-typedef struct {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-    uint8_t w;
-} led_color_t;
+  → key_driver_scan(&rf24g_scan_para)
+  → rf24g_remoter_apply()
+      → led_app_* 命令
+
+  → key_driver_scan(&io_scan_param)
+  → io_key_apply()
+      → io_key1_click_handle()
+      → led_app_mechanical_next()
+
+  → led_app_poll(current_time_ms)
+      → Timer 到点
+      → NVM 延迟保存
+
+  → 如果关灯：
+        thread_driver_sem_take()
+        return
+
+  → led_transport_spi_frame_poll()
+  → led_transport_spi_frame_ready()
+  → led_protocol_current_lamp()
+  → led_app_get_lamp_color(current_time_ms, lamp, &color)
+  → led_protocol_build_frame(lamp, &color, frame)
+  → led_transport_spi_frame_submit(frame)
+  → led_protocol_advance_lamp()
 ```
 
-### 3.1 动画层
+说明：
 
-```c
-void led_anim_init(uint32_t now_ms);
-void led_anim_set_mode(led_anim_mode_t mode, uint32_t now_ms);
-void led_anim_set_static_color(const led_color_t *color);
-void led_anim_get_lamp_color(uint32_t now_ms, uint8_t lamp,
-                             led_color_t *out);
+- `user_main()` 由 LED driver 线程循环调用，不写 `while(1)`；
+- 按键处理在逐灯发送之前；
+- 模式切换在下一帧生效；
+- 灯号游标不会被模式/颜色切换复位；
+- 关灯状态不发送任何帧，靠 TMR3 每 1 ms 释放一次 driver 信号量，避免线程空转。
+
+---
+
+## 3. 应用层 `led_app`
+
+### 3.1 状态
+
+```text
+led_app_power_on_flag
+led_app_brightness_level
+led_app_static_color_index
+led_app_icon_index
+led_app_off_from_modes_flag
+led_app_mechanical_used_flag
+led_app_timer_active_flag / kind / start_time_ms
+led_app_save_dirty_flag / due_time_ms
+led_app_current_time_ms
 ```
 
-### 3.2 协议层
+### 3.2 对外接口
+
+```c
+void led_app_init(uint32_t now_ms);
+void led_app_poll(uint32_t now_ms);
+
+void led_app_set_current_time_ms(uint32_t now_ms);
+uint32_t led_app_get_current_time_ms(void);
+
+bool led_app_power_is_on(void);
+void led_app_power_toggle(uint32_t now_ms);
+void led_app_power_on_external(uint32_t now_ms);
+void led_app_mechanical_next(uint32_t now_ms);
+
+void led_app_set_mode(led_animation_mode_t mode, uint32_t now_ms);
+void led_app_set_static_color(uint8_t color_index, uint32_t now_ms);
+void led_app_set_icon(uint8_t icon_index, uint32_t now_ms);
+void led_app_modes_next(uint32_t now_ms);
+void led_app_white_color_next(uint32_t now_ms);
+void led_app_brightness_next(void);
+void led_app_timer_start(app_timer_t timer_type, uint32_t now_ms);
+
+void led_app_get_lamp_color(uint32_t now_ms, uint8_t lamp,
+                            led_color_t *output_color);
+```
+
+### 3.3 应用层职责
+
+- 2.4G 与机械按键统一调用应用层；
+- 2.4G 模式与机械 20 模式相互独立；
+- 电源开关、PA3 输出、Timer 取消；
+- 静态亮度缩放；
+- NVM 2 s 延迟保存；
+- 逐灯输出时叠加 Timer 提示。
+
+---
+
+## 4. 动画层 `led_animation`
+
+### 4.1 顶层模式
+
+```c
+typedef enum {
+    LED_ANIMATION_MODE_OFF = 0,
+    LED_ANIMATION_MODE_STATIC_COLOR,
+    LED_ANIMATION_MODE_FADE,
+    LED_ANIMATION_MODE_STROBE,
+    LED_ANIMATION_MODE_MODES,
+    LED_ANIMATION_MODE_ICON,
+    LED_ANIMATION_MODE_WHITE_SELECT,
+    LED_ANIMATION_MODE_MECHANICAL,
+} led_animation_mode_t;
+```
+
+### 4.2 主要接口
+
+```c
+void led_animation_init(uint32_t now_ms);
+void led_animation_set_mode(led_animation_mode_t mode, uint32_t now_ms);
+led_animation_mode_t led_animation_get_mode(void);
+
+void led_animation_set_static_color_index(uint8_t static_color_index);
+void led_animation_set_icon(uint8_t icon_index);
+void led_animation_set_white_color_index(uint8_t white_color_index);
+uint8_t led_animation_get_white_color_index(void);
+
+void led_animation_set_mechanical_index(uint8_t mechanical_index);
+uint8_t led_animation_get_mechanical_index(void);
+bool led_animation_mechanical_uses_global_brightness(void);
+
+void led_animation_modes_enter(uint32_t now_ms);
+void led_animation_modes_next(uint32_t now_ms);
+uint8_t led_animation_get_modes_state(void);
+bool led_animation_modes_is_h(void);
+
+void led_animation_pause(uint32_t now_ms);
+void led_animation_resume(uint32_t now_ms);
+bool led_animation_is_paused(void);
+
+void led_animation_get_lamp_color(uint32_t now_ms, uint8_t lamp,
+                                  led_color_t *output_color);
+```
+
+### 4.3 输出内容
+
+- 静态单色：15 色表；
+- Fade：8 个关键帧，18.432 s 周期；
+- Strobe：7 色，每色 606 ms；
+- Modes：A~H，H 有进入过程；
+- 图标：美国国旗、三叶草、南瓜头、圣诞树；
+- White Select：白、冷白、浅蓝；
+- 机械 20 模式：见 [机械按键功能](./机械按键功能.md)。
+
+### 4.4 亮度
+
+动画层只输出 **100% 基准 RGBW**，不乘全局亮度。
+
+应用层决定是否缩放：
+
+- 2.4G 静态色、图标、White Select：缩放；
+- 2.4G Fade、Strobe、Modes：100%；
+- 机械 0~2：固定 W254/W149/W49，不再缩放；
+- 机械 3 Fade、18 高变化：100%；
+- 机械 4~17 静态色/图案：缩放；
+- 机械 19：关灯。
+
+---
+
+## 5. 协议层 `led_protocol`
 
 ```c
 void led_protocol_init(void);
@@ -68,7 +207,26 @@ void led_protocol_build_frame(uint8_t lamp, const led_color_t *color,
 void led_protocol_advance_lamp(void);
 ```
 
-### 3.3 传输层
+帧格式：
+
+| 字节 | 内容 |
+|---:|---|
+| 0 | 灯号 1~12 |
+| 1 | B |
+| 2 | G |
+| 3 | R |
+| 4 | W |
+| 5 | 前 5 字节累加和 `& 0xFF` |
+
+规则：
+
+- 灯号 `1,2,...,12,1,...` 持续循环；
+- 切换模式/颜色不能复位灯号；
+- 模式切换在下一帧生效。
+
+---
+
+## 6. 传输层 `led_transport_spi`
 
 ```c
 void led_transport_spi_init(void);
@@ -76,201 +234,19 @@ void led_transport_spi_frame_init(void);
 bool led_transport_spi_frame_ready(void);
 void led_transport_spi_frame_submit(const uint8_t *frame);
 void led_transport_spi_frame_poll(void);
+void led_transport_spi_power_off(void);
+void led_transport_spi_power_on(void);
+bool led_transport_spi_is_power_on(void);
 ```
 
----
+### 6.1 波形
 
-## 4. 总体框图
+SPI1 1 MHz，1 字节 = 8 us：
 
-```mermaid
-flowchart TB
-    subgraph APP [应用/调度层]
-        UM["user_main()"]
-        TMR["timer3_isq() 1 ms"]
-    end
-
-    subgraph ANIM [动画层 led_animation]
-        A1["led_anim_get_lamp_color()"]
-        A2["fade_get_color() / 静态色 / 关闭"]
-    end
-
-    subgraph PROTO [协议层 led_protocol]
-        P1["led_protocol_current_lamp()"]
-        P2["led_protocol_build_frame()"]
-        P3["led_protocol_advance_lamp()"]
-    end
-
-    subgraph TRANS [传输层 led_transport_spi]
-        T1["frame_ready() / frame_poll()"]
-        T2["frame_submit()"]
-        T3["波形编码 + 163 字节 0xFF 间隔"]
-        T4["SPI1 DMA + PA3 GPIO 空闲高"]
-    end
-
-    TMR -->|led_timer_tick++| UM
-    UM --> T1
-    UM --> P1
-    UM --> A1
-    A1 --> A2
-    UM --> P2
-    UM --> T2
-    P2 --> T2
-    T2 --> T3
-    T3 --> T4
-    UM --> P3
-    P3 -->|游标 1~12 循环| P1
-```
-
----
-
-## 5. 调用层次
-
-```mermaid
-flowchart LR
-    FUNC["func_process()"] --> UM["user_main()"]
-
-    UM --> POLL["led_transport_spi_frame_poll()"]
-    UM --> READY["led_transport_spi_frame_ready()"]
-    UM --> LAMP["led_protocol_current_lamp()"]
-    UM --> COL["led_anim_get_lamp_color()"]
-    UM --> BUILD["led_protocol_build_frame()"]
-    UM --> SUBMIT["led_transport_spi_frame_submit()"]
-    UM --> ADV["led_protocol_advance_lamp()"]
-
-    COL --> FADE["fade_lerp() / fade_get_color()"]
-
-    BUILD --> CHK["累加和校验"]
-
-    SUBMIT --> ENC["led_transport_encode_frame()"]
-    SUBMIT --> MAP["led_transport_spi_set_spi_output()"]
-    SUBMIT --> DMA["spi_set_dma_addr() / spi_set_dma_cnt()"]
-    SUBMIT --> WAIT["等待 frame_done 或 pending"]
-    TMR1ISR["led_transport_gap_isr()"] --> GAP["DMA 结束前 500 us 切 GPIO 高"]
-    SPIISR["led_transport_spi_isr()"] --> DONE["清 pending、置 frame_done"]
-    DONE --> WAIT
-    SUBMIT --> POLL["轮询 SPI_FLAG_PENDING（兜底）"]
-    POLL --> IDLE["SPI 完成后再切高"]
-```
-
-初始化调用层次：
-
-```mermaid
-flowchart LR
-    INIT["user_init()"] --> TR0["led_transport_spi_init()"]
-    INIT --> TR1["led_transport_spi_frame_init()"]
-    INIT --> PR0["led_protocol_init()"]
-    INIT --> AN0["led_anim_init(0)"]
-    INIT --> AN1["led_anim_set_mode(FADE, 0)"]
-    INIT --> TM0["tmr3_init()"]
-```
-
----
-
-## 6. 单帧调用时序
-
-```mermaid
-sequenceDiagram
-    participant TMR3 as TMR3 ISR
-    participant MAIN as user_main
-    participant ANIM as 动画层
-    participant PROTO as 协议层
-    participant TRANS as 传输层
-    participant TMR1 as TMR1 中断
-    participant SPI as SPI1/DMA
-    participant ISR as SPI 完成中断
-    participant LED as PA3/灯串
-
-    TMR3->>TMR3: led_timer_tick++
-
-    MAIN->>TRANS: led_transport_spi_frame_poll()
-    MAIN->>TRANS: led_transport_spi_frame_ready()
-    TRANS-->>MAIN: true（方案 A）
-
-    MAIN->>MAIN: now = led_timer_tick
-    MAIN->>PROTO: led_protocol_current_lamp()
-    PROTO-->>MAIN: lamp = 1~12
-
-    MAIN->>ANIM: led_anim_get_lamp_color(now, lamp, color)
-    ANIM-->>MAIN: color
-
-    MAIN->>PROTO: led_protocol_build_frame(lamp, color, frame)
-    PROTO-->>MAIN: frame[6]
-
-    MAIN->>TRANS: led_transport_spi_frame_submit(frame)
-    TRANS->>TRANS: 48 bit 编码 + 帧尾 + 163×0xFF
-    TRANS->>SPI: 启动 DMA
-    SPI-->>LED: 波形输出
-    TMR1->>TRANS: DMA 结束前 500 us 切 GPIO 高
-    SPI-->>ISR: DMA 完成中断
-    ISR->>TRANS: 清 pending、frame_done = 1
-    TRANS->>TRANS: 等待 frame_done / 轮询 pending
-    TRANS->>TRANS: 清 pending、关 TMR1、切 GPIO 高
-    TRANS-->>MAIN: 返回（阻塞约 3~4.5 ms）
-
-    MAIN->>PROTO: led_protocol_advance_lamp()
-    PROTO-->>MAIN: lamp = (lamp + 1) mod 12
-```
-
----
-
-## 7. 初始化时序
-
-```mermaid
-sequenceDiagram
-    participant INIT as user_init
-    participant TR as 传输层
-    participant PR as 协议层
-    participant AN as 动画层
-    participant TM as TMR3
-
-    INIT->>TR: led_transport_spi_init()
-    TR->>TR: PA3 GPIO 高、SPI1 1 MHz 初始化、空闲高
-    INIT->>TR: led_transport_spi_frame_init()
-    INIT->>PR: led_protocol_init()
-    PR-->>INIT: s_lamp_cursor = 0
-    INIT->>AN: led_anim_init(0)
-    INIT->>AN: led_anim_set_mode(LED_ANIM_FADE, 0)
-    INIT->>TM: tmr3_init()
-    TM-->>INIT: 1 ms 周期开始
-```
-
----
-
-## 8. 协议帧格式
-
-每帧 48 bit = 6 字节，MSB first：
-
-| 字节 | 内容 | 说明 |
-|---:|---|---|
-| 0 | 灯号 | 1~12 |
-| 1 | B | 蓝色分量 |
-| 2 | G | 绿色分量 |
-| 3 | R | 红色分量 |
-| 4 | W | 白色分量 |
-| 5 | 校验 | 前 5 字节累加和 `& 0xFF` |
-
-协议层组帧：
-
-```c
-frame[0] = lamp;
-frame[1] = color->b;
-frame[2] = color->g;
-frame[3] = color->r;
-frame[4] = color->w;
-frame[5] = (frame[0] + frame[1] + frame[2] +
-            frame[3] + frame[4]) & 0xFF;
-```
-
----
-
-## 9. SPI 波形编码
-
-SPI1 工作在 1 MHz，1 字节 = 8 us：
-
-| 协议 bit | SPI 字节 | 时间 |
+| 逻辑 | SPI 字节 | 时间 |
 |---|---|---|
-| 逻辑 0 | `0x00 + 3×0xFF` | 8 us 低 + 24 us 高 |
-| 逻辑 1 | `0x00 + 7×0xFF` | 8 us 低 + 56 us 高 |
+| 0 | `0x00 + 3×0xFF` | 8 us 低 + 24 us 高 |
+| 1 | `0x00 + 7×0xFF` | 8 us 低 + 56 us 高 |
 
 一帧：
 
@@ -278,420 +254,218 @@ SPI1 工作在 1 MHz，1 字节 = 8 us：
 48 bit（MSB first）
 + 帧尾 0x00（8 us 低）
 + 帧尾 0xFF（8 us 高）
-+ 163 字节 0xFF（1304 us 高）
++ 163 字节 0xFF（约 1.304 ms 高）
 ```
 
-帧尾到下一帧帧头约：
+帧间隔约 1.32 ms。
 
-```text
-8 us 低 + 8 us 高 + 163 × 8 us = 1320 us ≈ 1.32 ms
-```
+### 6.2 空闲高电平
 
-> 1320 us 来自之前四份采集（2 hour timer、美国国旗、Strobe、Fade）的平均帧间隔约 1321 us。
+- 初始化时 PA3 为 GPIO 高；
+- 发送时切成 SPI MOSI；
+- TMR1 在 DMA 结束前约 500 us 切回 GPIO 高，避免负脉冲；
+- SPI 完成中断置完成标志；
+- 主循环保留 pending 轮询和超时兜底；
+- 关灯时 PA3 保持低，且不再提交帧。
 
-1 ms 时基由 TMR3 产生：
+### 6.3 关灯
 
-```text
-160 MHz / 1600 = 100 kHz（10 us）
-period = 100 - 1 → 100 × 10 us = 1 ms
-```
-
----
-
-## 10. 时序与刷新率
-
-| 项目 | 数值 |
-|---|---|
-| SPI 时钟 | 1 MHz |
-| 1 字节 | 8 us |
-| 逻辑 0 单 bit | 32 us |
-| 逻辑 1 单 bit | 64 us |
-| 单帧 48 bit | 1.536~3.072 ms |
-| 帧间隔 | 约 1.32 ms |
-| 单帧总时间 | 约 2.8~4.4 ms（加切换/构建开销） |
-| 12 帧一轮 | 约 35~53 ms |
-
-说明：
-
-- 传输层一次只发一帧；
-- `user_main()` 每调用一次发一帧；
-- 12 次调用完成灯号 1~12；
-- 帧间隔由 DMA 中的 163 字节 `0xFF` 产生；
-- TMR1 在 DMA 结束前约 500 us 把 PA3 提前切回 GPIO 高电平；
-- SPI 完成中断置 `frame_done`，主循环同时保留 pending 轮询和超时保护作为兜底；
-- 下一帧构建和 GPIO 切换会额外增加几十 us，实际帧间隔略大于 1.32 ms。
-
----
-
-## 11. 灯号规则
-
-协议层维护一个持续游标：
+`led_app_power_off()` 调用：
 
 ```c
-static uint8_t s_lamp_cursor;   /* 0~11 */
+led_transport_spi_power_off();
 ```
 
-- 当前灯号：`s_lamp_cursor + 1`；
-- 每发送完一帧：`s_lamp_cursor = (s_lamp_cursor + 1) % 12`；
-- 灯号顺序：`1,2,3,...,12,1,2,...`；
-- 动画切换、颜色变化、模式切换都**不能**修改 `s_lamp_cursor`；
-- 因此即使在中途切换模式，灯号也不会重新从 1 开始。
+- 清发送完成标志；
+- PA3 拉低；
+- 后续 `frame_submit()` 直接丢弃，不产生波形。
 
-```mermaid
-stateDiagram-v2
-    [*] --> Lamp1
-    Lamp1 --> Lamp2
-    Lamp2 --> Lamp3
-    Lamp3 --> Lamp4
-    Lamp4 --> Lamp5
-    Lamp5 --> Lamp6
-    Lamp6 --> Lamp7
-    Lamp7 --> Lamp8
-    Lamp8 --> Lamp9
-    Lamp9 --> Lamp10
-    Lamp10 --> Lamp11
-    Lamp11 --> Lamp12
-    Lamp12 --> Lamp1
-```
+开灯调用 `led_transport_spi_power_on()`，PA3 恢复高。
 
 ---
 
-## 12. 模式切换与下一帧生效
+## 7. 电源、亮度、NVM、Timer
 
-当前发送流程是：
+### 7.1 电源
 
-1. `user_main()` 读取 `now`；
-2. 取当前灯号；
-3. 动画层计算当前颜色；
-4. 协议层组帧；
-5. 传输层发送这一帧（阻塞到帧尾 + 帧间隔）。
+关灯：
 
-因此：
+- 动画暂停；
+- PA3 低；
+- Timer 取消；
+- 2 s 后保存 power=0；
+- TMR3 每 1 ms 释放 driver 信号量，让 `user_main()` 在关灯状态继续轮询按键/NVM。
 
-- 如果模式在 `frame_submit()` 期间切换，当前帧已经发出；
-- 下一次 `user_main()` 会用新模式重新计算颜色；
-- 即模式切换在**下一帧**生效；
-- 灯号游标在 `frame_submit()` 之后前进，所以下一帧是下一个灯号。
+开灯：
+
+- PA3 高；
+- 动画恢复；
+- 亮度不变；
+- R1C1 从暂停处继续；
+- Modes H 关灯后，R1C1/机械开灯从 Modes 索引 0 开始；
+- 机械开灯从机械索引 0 开始。
+
+### 7.2 亮度
+
+5 挡：
 
 ```text
-帧 N：旧模式颜色
-  ↓ 发送 + 1.32 ms 间隔
-模式切换发生
-  ↓
-帧 N+1：新模式颜色，灯号 N+1
+20% / 40% / 60% / 80% / 100%
 ```
 
-注意：模式切换函数应在主循环上下文调用；如果从 ISR 调用，需要额外的 pending 标志，避免多字节变量竞争。
+- 只作用于静态类输出；
+- 上电 100%；
+- 亮度不写 NVM；
+- 远程 Dimming 只改全局挡位；
+- 机械 0~2 是固定白光亮度，不乘全局挡位。
 
----
+### 7.3 NVM
 
-## 13. 方案 A 与方案 B
-
-### 方案 A：当前实现
-
-| 接口 | 行为 |
-|---|---|
-| `led_transport_spi_frame_ready()` | 恒返回 `true` |
-| `led_transport_spi_frame_submit()` | 阻塞到本帧和帧间隔发送完成 |
-| `led_transport_spi_frame_poll()` | 空实现 |
-
-特点：
-
-- 一次一帧；
-- 代码简单；
-- 模式切换下一帧生效；
-- 主循环在发送期间被阻塞约 3~4.5 ms；
-- DMA 完成中断里立即把 PA3 切回 GPIO 高，避免主循环被任务打断导致低电平拉长。
-
-### 方案 B：预留
-
-以后可改为双缓冲 + SPI 完成中断：
-
-- `frame_ready()`：是否有空闲缓冲；
-- `frame_submit()`：编码入队，立即返回；
-- `frame_poll()`：处理 DMA 完成并启动下一帧。
-
-主循环的调用方式保持不变。
-
----
-
-## 14. 测试函数
+`user_data_t`：
 
 ```c
-void test_led_transport_spi_send_static_12(void);
+uint8_t valid;
+uint8_t version;
+uint8_t power;
+uint8_t mode;
+uint8_t color;
 ```
 
-- 逐帧发送 12 盏灯的静态颜色；
-- 每帧灯号 1~12；
-- 每帧后带 163 字节 `0xFF` 间隔；
-- 用于验证波形、灯号顺序和硬件映射；
-- 不参与正常动画流程。
+保存：
+
+- power；
+- mode；
+- static color / icon 索引。
+
+不保存：
+
+- 亮度；
+- Timer；
+- Modes A~H 状态；
+- White Select 索引；
+- 机械索引；
+- 机械 `mechanical_used_flag`。
+
+2 s 防抖保存；上电恢复后：
+
+- 模式/颜色恢复；
+- 亮度 100%；
+- 机械模式回到机械白光 0；
+- Timer 无效。
+
+### 7.4 Timer
+
+- 2h：提示 1 次红色（OFF 500 ms → RED 500 ms）；
+- 4h：提示 2 次红色（OFF/RED/OFF/RED）；
+- 提示结束后回当前模式；
+- 同一个 Timer 重复按忽略；
+- 2h/4h 互相切换时重新计时并重播提示；
+- 关灯立即取消 Timer；
+- Timer 不写 NVM；
+- Timer 倒计时 2h/4h 到点自动关灯。
 
 ---
 
-## 15. 硬件映射注意事项
+## 8. 按键输入
 
-之前实测：
+### 8.1 2.4G
 
-- 只接前 6 个灯时，发送灯号 `1,2,3,4,5,6`，实际显示为 `1,2,3,3,2,1`；
-- 原始图标数据中，`1~6` 与 `7~12` 通常相同；
-- 说明灯串很可能是**两组 6 灯镜像**，每组 3 个唯一颜色。
+`key_driver_scan(&rf24g_scan_para)` → `rf24g_remoter_apply()` → `led_app_*`。
 
-当前动画层：
+功能见 [遥控器界面和功能](./遥控器界面和功能.md)。
 
-- 使用 12 个逻辑灯号；
-- Fade/Static 模式下 12 盏灯颜色相同，不受映射影响；
-- 后续实现图标/图案模式时，需要按实际硬件映射生成 12 个颜色，例如：
-  - 美国国旗：`1~6 == 7~12 = 红、蓝、白、红、蓝、白`；
-  - 三叶草：`1~6 == 7~12 = 绿、白、绿、白、绿、白`；
-- 如果接满 12 个后确认第二组映射不同，只需要调整动画层的灯号到颜色表，不影响协议层灯号游标和传输层波形。
+### 8.2 机械
 
----
+`key_driver_scan(&io_scan_param)` → `io_key_apply()` → `io_key1_click_handle()` → `led_app_mechanical_next()`。
 
-## 16. 代码约束
-
-- 不使用 `malloc/free`；
-- 不使用递归；
-- 定时器 ISR 只做计数/引脚切换，必须保持短小；
-- SPI 完成中断只清 pending、置 `frame_done`；主循环保留 pending 轮询和超时兜底；
-- TMR1、TMR3、SPI 中断优先级都必须为 `0`；
-- ISR 中不调用阻塞函数；
-- 传输层的 `frame_submit()` 只在主循环/任务上下文调用；
-- 所有缓冲区静态分配；
-- 方案 A 下主循环发送一帧约 3~4.5 ms；
-- 单帧缓冲区 549 字节，静态分配。
+- 只处理 CLICK；
+- 机械索引独立于 2.4G 模式；
+- 详细模式、亮度、电源、Timer 行为见 [机械按键功能](./机械按键功能.md)。
 
 ---
 
-## 17. 文件清单
+## 9. 中断与时序
+
+| 中断 | 作用 | 优先级 |
+|---|---|---:|
+| TMR3 | 1 ms 时基 | 0 |
+| TMR1 | DMA 结束前约 500 us 切 PA3 高 | 0 |
+| SPI1 | DMA 完成，置完成标志 | 0 |
+
+- TMR1 不能设为 1；
+- TMR1 的 prescale 无效，按实测 10 us = 1600 ticks；
+- 帧内低电平约 8~9 us；
+- 帧内高电平 24 us / 56 us；
+- 帧间隔约 1.32 ms；
+- 帧间隔后不能再出现低脉冲。
+
+---
+
+## 10. 文件清单
 
 | 文件 | 说明 |
 |---|---|
-| `user_app/led_driver/led_animation.c/.h` | 动画层 |
-| `user_app/led_driver/led_protocol.c/.h` | 协议层 |
-| `user_app/led_driver/led_transport_spi.c/.h` | 传输层 |
-| `user_app/user_main.c` | 1 ms 时基、初始化、逐帧调度 |
+| `user_app/user_main.c` | 1 ms 调度、按键扫描、逐帧发送 |
+| `user_app/led_app.c/.h` | 应用状态、电源、亮度、Timer、NVM、机械索引 |
+| `user_app/led_driver/led_animation.c/.h` | 动画与机械模式表 |
+| `user_app/led_driver/led_protocol.c/.h` | 协议组帧 |
+| `user_app/led_driver/led_transport_spi.c/.h` | SPI/DMA 波形 |
+| `user_app/rf24g_remoter/rf24g_remoter_apply.c/.h` | 2.4G 按键映射 |
+| `user_app/io_key/io_key_driver.c/.h` | 机械按键检测 |
+| `user_app/io_key/io_key_apply.c/.h` | 机械按键事件处理 |
 
-> 新增的 `led_animation.c`、`led_protocol.c` 需要手动加入 Code::Blocks 工程（`.cbp`），否则链接会找不到对应函数。
+Code::Blocks 需要包含：
 
----
-
-## 18. 空闲高电平保护（不能有负脉冲）
-
-### 18.1 现象
-
-SPI DMA 结束后，SPI1 会把 PA3 拉低。如果 GPIO 切换晚了，空闲高电平期间就会出现一个低脉冲：
-
-```text
-1312 us 高（帧间隔）
-→ 0.5~0.75 us 低   ← 负脉冲
-→ 26~29 us 高
-→ 下一帧第一个 8~9 us 低
-```
-
-这个低脉冲不是协议里的数据 bit，而是一个**额外的非法脉冲**。即使只有 0.5 us，也可能被灯串芯片误判，导致灯光闪烁。
-
-实测曾出现：
-
-- 542 ns：没有被任务打断；
-- 64 us、1.38 ms、5.8 ms：被其他任务/中断打断；
-- 0.5~0.75 us：TMR1 没有在 DMA 结束前切高，轮询兜底在 DMA 结束瞬间才切高。
-
-### 18.2 当前处理
-
-用 **TMR1 在 DMA 结束前约 500 us 提前切高**：
-
-```text
-DMA 结束前 500 us：TMR1 中断
-→ 此时 SPI 还在输出 0xFF 高电平
-→ 切 GPIO 高，高到高
-→ 不产生低脉冲
-```
-
-TMR1 按 **10 us 分辨率**工作，10 us 对应 1600 个计数：
-
-```c
-#define LED_TRANSPORT_TMR1_10US_TICKS 1600U
-#define LED_TRANSPORT_GAP_SWITCH_MARGIN_US 500U
-```
-
-```c
-us = wave_len * 8;
-us -= 500;
-units = us / 10;
-ticks = units * 1600;
-```
-
-- 初始化时 `tmr_cmd(TMR1, DISABLE)`；
-- 中断里先 `tmr_cmd(TMR1, DISABLE)`，再清标志、切 GPIO 高；
-- 只在 `frame_submit()` 中启动一次，保证一次性；
-- SPI 完成中断在 dummy 字节之后注册，优先级 0；
-- SPI 中断里无条件清 pending、置 `frame_done`；
-- 主循环优先等待 `frame_done`，同时保留 pending 轮询和超时保护作为兜底；
-- 兜底完成后再清 pending、关 TMR1、切 GPIO 高。
-
-当前代码使用 **SPI 完成中断 + 轮询兜底**：
-
-```text
-SPI DMA 完成
-→ SPI ISR 清 pending、置 frame_done
-→ 主循环退出
-```
-
-如果 SPI 中断没有进入，主循环仍能通过轮询 `SPI_FLAG_PENDING` 退出，不会卡死到看门狗。
-
-### 18.3 实测结果
-
-最新波形：
-
-- 采集 46634 ms；
-- 10753 个帧间隔；
-- 所有帧间隔后的低电平都 ≥ 8.0 us；
-- 没有 <7 us 的负脉冲；
-- 10753 个帧间隔全部干净，负脉冲数量为 0；
-- 灯号 1~12 连续循环；
-- fade 正常推进。
-
-### 18.4 注意
-
-- TMR1、TMR3、SPI 中断优先级**必须都为 0**；
-- 不能把 TMR1 设为 1，否则会压住 TMR3，fade 会停住；
-- 实测 PA5 在 SPI 中断里每帧翻转一次，周期约 3.7 ms，说明中断每帧正常进入；
-- 如果 TMR1 晚到，空闲低脉冲会重新出现；
-- 如果要求物理上绝对零低，最终方案是加硬件 OR 门：`PA3 = SPI_DATA OR GPIO_IDLE_EN`。
+- `user_app/led_app.c`
+- `user_app/rf24g_remoter/rf24g_remoter_apply.c`
+- `user_app/io_key/io_key_driver.c`
+- `user_app/io_key/io_key_apply.c`
+- `user_app/led_driver/led_animation.c`
+- `user_app/led_driver/led_protocol.c`
+- `user_app/led_driver/led_transport_spi.c`
 
 ---
 
-## 19. 踩坑记录（必须遵守）
+## 11. 常见问题
 
-### 19.1 TMR1/TMR3/SPI 中断优先级必须一样，都是 0
+### 11.1 Timer 提示已经结束，但仍看到旧颜色
 
-TMR1 负责在 DMA 结束前切高，TMR3 负责 1 ms 时基，SPI 负责帧完成。三者优先级必须一致：
+- Timer 只是覆盖输出，不切换动画模式；
+- 提示结束后 BASE 取当前模式；
+- 如果当前模式已切换，应回到新模式，不是旧模式。
 
-```c
-spi_pic_config(SPI1, led_transport_spi_isr, 0, ENABLE);
-tmr_pic_config(TMR1, led_transport_gap_isr, 0, TMR_IT_UPDATE, ENABLE);
-tmr_pic_config(TMR3, timer3_isq, 0, TMR_IT_UPDATE, ENABLE);
-```
+### 11.2 关灯后 Timer 还在走
 
-**不能把 TMR1 设为 1。**
+- 关灯必须调用 `led_app_power_off()`；
+- 该函数会清 `led_app_timer_active_flag`；
+- 机械模式 19、R1C1 关灯、Timer 到点都走这条路径。
 
-实测把 TMR1 设为 1 后：
+### 11.3 机械第一次按键不是白光
 
-- TMR1 会覆盖 TMR3；
-- TMR3 的 1 ms 中断不能正常到来；
-- `led_timer_tick` 不增加或增加极慢；
-- fade 动画看起来“没有在跑”；
-- 颜色长时间停在红色附近；
-- 也可能压住 SPI 完成中断，导致 `frame_done` 不置位。
+- 机械 `mechanical_used_flag` 初始为 0；
+- 第一次机械键应落索引 0（W254）；
+- 2.4G 切模式不会清机械索引，但会保留 `mechanical_used_flag`；
+- 上电/R1C1 关灯后机械开灯会回到索引 0。
 
-所以：
+### 11.4 静态图案不受 Dimming 影响
 
-```text
-TMR1 优先级 = 0
-TMR3 优先级 = 0
-SPI 优先级  = 0
-```
+- 检查 `led_animation_mechanical_uses_global_brightness()`；
+- 机械 4~17 应返回 true；
+- 机械 0~2、3、18、19 返回 false。
 
-必须保持一致。
+---
 
-### 19.2 灯串控制信号空闲时不能有负脉冲
+## 12. 验证清单
 
-空闲高电平期间**不能出现任何低脉冲**，包括 0.5 us 这种极短脉冲。
-
-正常帧边界应该是：
-
-```text
-1312 us 高
-→ 下一帧第一个 8~9 us 低
-→ 24/56 us 高
-```
-
-不能是：
-
-```text
-1312 us 高
-→ 0.5 us 低   ← 非法负脉冲
-→ 26 us 高
-→ 9 us 低
-```
-
-原因：
-
-- 0.5 us 低不是合法数据 bit；
-- 后面的 26 us 高也不是合法 bit；
-- 灯串芯片可能把它当成额外 bit 或错误边界；
-- 结果是灯光闪烁、颜色错位或整帧偏移。
-
-判断标准：
-
-- 帧内低电平：约 8~9 us；
-- 帧内高电平：约 24 us（0）或 56 us（1）；
-- 帧间隔：约 1312 us 高；
-- 帧间隔后直接是下一帧的 8~9 us 低；
-- 中间不能再出现任何低脉冲。
-
-### 19.3 TMR1 的其他注意事项
-
-- TMR1 的 `prescale` 无效，只有 TMR3 支持 `prescale`；
-- 不能按 160 MHz 直接算 TMR1 周期；
-- 当前按实测 **10 us = 1600 ticks** 计算；
-- TMR1 必须一次性：初始化关闭，中断里关闭，只在 `frame_submit()` 启动；
-- 如果 TMR1 周期算错，会提前切高，截断整帧，表现为“8.7 us 低 + 3.5 ms 高”。
-
-### 19.4 SPI 完成中断的坑
-
-早期 SPI 完成中断没有正常进入，导致：
-
-- `frame_done` 永远不置位；
-- `frame_submit()` 卡死；
-- 看门狗复位；
-- 每约 1.9 s 只发一帧，灯号一直是 1。
-
-后来定位到几个问题：
-
-1. TMR1 优先级设成 1，可能压住 SPI/TMR3；
-2. SPI 中断在 dummy 字节之前注册，dummy 完成会干扰 pending；
-3. ISR 里先判断 `spi_get_flag()`，如果 pending 被硬件自动清除，就不会置 `frame_done`。
-
-现在的处理：
-
-```text
-SPI1 初始化
-→ 先发 dummy 0xFF 并等完成
-→ 清 pending
-→ 再注册 SPI 完成中断
-```
-
-ISR 改为无条件处理：
-
-```c
-AT(.com_text.isr)
-void led_transport_spi_isr(void)
-{
-#if USER_DEBUG_ENABLE
-    USER_DEBUG_IO_TOGGLE();
-#endif
-    spi_isr_cnt++;
-
-    spi_clear_flag(SPI1, SPI_FLAG_PENDING);
-    led_transport_frame_done = 1;
-}
-```
-
-主循环仍保留：
-
-```text
-frame_done 优先
-pending 轮询兜底
-超时保护
-```
-
-实测 PA5 每帧翻转一次，周期约 3.7 ms，说明 SPI 完成中断已经正常进入。
-
-不要恢复以下旧写法：
-
-- SPI 中断在 dummy 之前注册；
-- TMR1 优先级设为 1；
-- ISR 里只判断 `spi_get_flag()` 才置 `frame_done`；
-- 删除 pending 轮询和超时保护。
+1. 上电默认红色、100%；
+2. R1C1 开关灯，PA3 高/低正确；
+3. 关灯无帧、无 Timer、按键可唤醒；
+4. Fade 18.432 s 循环；
+5. Strobe 7 色；
+6. Modes A~H，H 后关灯；
+7. 2h 提示 1 次、4h 提示 2 次；
+8. Timer 切换/关灯取消；
+9. 机械 0 W254、1 W149、2 W49、3 Fade、4~17、18 高变化、19 关灯；
+10. 机械关灯/R1C1 关灯后回索引 0；
+11. NVM 模式/颜色恢复，亮度上电 100%；
+12. 空闲无负脉冲，TMR1/TMR3/SPI 优先级都为 0。

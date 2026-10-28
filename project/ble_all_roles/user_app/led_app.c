@@ -22,14 +22,23 @@ static const uint8_t brightness_scale_table[BRIGHTNESS_LEVEL_COUNT] = {
 #define TIMER_2H_DURATION_MS 7200000UL
 #define TIMER_4H_DURATION_MS 14400000UL
 
+/*
+    TEST ONLY
+    timer 测试时使用的倒计时
+*/
+// #define TIMER_2H_DURATION_MS (uint32_t)10 * 1000
+// #define TIMER_4H_DURATION_MS (uint32_t)20 * 1000
+
 /* Timer 提示输出类型 */
-typedef enum {
+typedef enum
+{
     TIMER_OUT_OFF = 0,
     TIMER_OUT_BASE,
     TIMER_OUT_RED
 } timer_output_type_t;
 
-typedef struct {
+typedef struct
+{
     uint16_t duration_ms;
     uint8_t output;
 } timer_step_t;
@@ -71,6 +80,8 @@ static uint8_t led_app_save_dirty_flag;
 static uint32_t led_app_save_due_time_ms;
 /* Modes 的 H 状态按到关灯后，下一次开灯从 Modes 索引 0 重新开始 */
 static uint8_t led_app_off_from_modes_flag;
+/* 机械键是否已经使用过；首次按机械键先落白光 0 */
+static uint8_t led_app_mechanical_used_flag;
 
 /* TMR3 ISR 读取：关灯时每 1 ms 释放一次驱动信号量，避免 driver 线程空转 */
 volatile uint8_t led_app_off_interrupt_flag;
@@ -81,10 +92,15 @@ static app_timer_t led_app_timer_kind;
 static uint32_t led_app_timer_start_time_ms;
 
 /**
- * @brief 当前是否静态类模式（使用全局亮度）
+ * @brief 当前模式输出是否要乘全局亮度
+ * @note 机械 0~2 已经是固定白光亮度，不再乘全局亮度。
  */
-static bool led_app_is_static_mode(led_animation_mode_t mode)
+static bool led_app_uses_global_brightness(led_animation_mode_t mode)
 {
+    if (mode == LED_ANIMATION_MODE_MECHANICAL) {
+        return led_animation_mechanical_uses_global_brightness();
+    }
+
     return (mode == LED_ANIMATION_MODE_STATIC_COLOR) ||
            (mode == LED_ANIMATION_MODE_ICON) ||
            (mode == LED_ANIMATION_MODE_WHITE_SELECT);
@@ -151,7 +167,7 @@ static bool led_app_restore_user_data(uint32_t now_ms)
     }
 
     mode = (led_animation_mode_t)user_data.mode;
-    if (mode > LED_ANIMATION_MODE_WHITE_SELECT) {
+    if (mode > LED_ANIMATION_MODE_MECHANICAL) {
         return false;
     }
 
@@ -181,6 +197,11 @@ static bool led_app_restore_user_data(uint32_t now_ms)
         /* White Select 的颜色索引不保存，上电从白色开始 */
         led_animation_set_white_color_index((uint8_t)LED_WHITE_WHITE);
         led_animation_set_mode(LED_ANIMATION_MODE_WHITE_SELECT, now_ms);
+    } else if (mode == LED_ANIMATION_MODE_MECHANICAL) {
+        /* 机械索引不保存，上电从机械白光 0 开始 */
+        led_app_mechanical_used_flag = 0U;
+        led_animation_set_mechanical_index((uint8_t)LED_MECHANICAL_WHITE_100);
+        led_animation_set_mode(LED_ANIMATION_MODE_MECHANICAL, now_ms);
     } else {
         return false;
     }
@@ -288,6 +309,7 @@ void led_app_init(uint32_t now_ms)
     led_app_save_dirty_flag = 0U;
     led_app_save_due_time_ms = now_ms;
     led_app_off_from_modes_flag = 0U;
+    led_app_mechanical_used_flag = 0U;
     led_app_timer_active_flag = 0U;
     led_app_timer_kind = APP_TIMER_2H;
     led_app_timer_start_time_ms = now_ms;
@@ -424,6 +446,62 @@ void led_app_power_toggle(uint32_t now_ms)
 void led_app_power_on_external(uint32_t now_ms)
 {
     led_app_power_on(now_ms);
+}
+
+/**
+ * @brief 机械按键 CLICK：前进机械索引，19 为关灯
+ * @note 关灯后第一次按机械键先显示白光 0；开灯状态下第一次按机械键
+ *       也先显示白光 0，之后每次索引 +1。索引只保存在 RAM，不写 NVM。
+ */
+void led_app_mechanical_next(uint32_t now_ms)
+{
+    uint8_t mechanical_index;
+    bool mode_changed;
+
+    if (led_app_power_on_flag == 0U) {
+        led_app_power_on(now_ms);
+        led_app_mechanical_used_flag = 1U;
+        led_animation_set_mechanical_index((uint8_t)LED_MECHANICAL_WHITE_100);
+        led_animation_set_mode(LED_ANIMATION_MODE_MECHANICAL, now_ms);
+        user_data.mode = (uint8_t)LED_ANIMATION_MODE_MECHANICAL;
+        user_data.color = 0U;
+        led_app_mark_save(now_ms);
+        return;
+    }
+
+    if (led_app_mechanical_used_flag == 0U) {
+        mechanical_index = (uint8_t)LED_MECHANICAL_WHITE_100;
+        led_app_mechanical_used_flag = 1U;
+    } else {
+        mechanical_index = led_animation_get_mechanical_index();
+        if (mechanical_index >= (uint8_t)LED_MECHANICAL_OFF) {
+            mechanical_index = (uint8_t)LED_MECHANICAL_WHITE_100;
+        } else {
+            mechanical_index++;
+        }
+    }
+
+    mode_changed = (led_animation_get_mode() != LED_ANIMATION_MODE_MECHANICAL);
+
+    if (mechanical_index == (uint8_t)LED_MECHANICAL_OFF) {
+        /* 机械模式 19 关灯；索引回到 0，下一次开灯显示白光 */
+        led_animation_set_mechanical_index((uint8_t)LED_MECHANICAL_WHITE_100);
+        led_animation_set_mode(LED_ANIMATION_MODE_MECHANICAL, now_ms);
+        user_data.mode = (uint8_t)LED_ANIMATION_MODE_MECHANICAL;
+        user_data.color = 0U;
+        led_app_power_off(now_ms);
+        return;
+    }
+
+    led_animation_set_mechanical_index(mechanical_index);
+    led_animation_set_mode(LED_ANIMATION_MODE_MECHANICAL, now_ms);
+    user_data.mode = (uint8_t)LED_ANIMATION_MODE_MECHANICAL;
+    user_data.color = 0U;
+
+    /* 索引变化本身不写 NVM；只有从其他模式进入机械模式才需要保存 mode */
+    if (mode_changed) {
+        led_app_mark_save(now_ms);
+    }
 }
 
 /**
@@ -585,7 +663,7 @@ void led_app_get_lamp_color(uint32_t now_ms, uint8_t lamp,
     led_animation_get_lamp_color(now_ms, lamp, output_color);
 
     mode = led_animation_get_mode();
-    if (led_app_is_static_mode(mode)) {
+    if (led_app_uses_global_brightness(mode)) {
         output_color->r = led_app_brightness_apply(output_color->r);
         output_color->g = led_app_brightness_apply(output_color->g);
         output_color->b = led_app_brightness_apply(output_color->b);

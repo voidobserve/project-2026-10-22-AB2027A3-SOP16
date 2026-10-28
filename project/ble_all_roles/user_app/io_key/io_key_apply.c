@@ -1,5 +1,6 @@
 #include "io_key_apply.h"
 #include "io_key_driver.h"
+#include "led_app.h"
 
 extern const io_key_handle_func_t io_key_event_handle_table[1];
 
@@ -11,7 +12,7 @@ void io_key_apply(void)
     io_key_event = io_convert_key_event(io_scan_param.latest_key_val,
                                         io_scan_param.latest_key_event);
     io_scan_param.latest_key_val = NO_KEY; // 获取到按键事件后，清空按键值
-	io_scan_param.latest_key_event = KEY_EVENT_NONE;
+    io_scan_param.latest_key_event = KEY_EVENT_NONE;
     if (IO_KEY_EVENT_NONE == io_key_event) {
         return;
     }
@@ -26,7 +27,8 @@ void io_key_apply(void)
 
 void io_key1_click_handle(void)
 {
-    printf("io key1 click\n");
+    /* 机械按键单击：交给应用层推进机械模式索引 */
+    led_app_mechanical_next(led_app_get_current_time_ms());
 }
 
 const io_key_handle_func_t io_key_event_handle_table[1] = {

@@ -186,6 +186,85 @@ static const uint16_t modes_h_final_offset_ms[MODES_H_ENTRY_LAMP_COUNT] = {
     257U, 421U, 465U, 551U, 596U, 682U, 764U, 974U, 1018U, 1062U, 1066U, 1110U,
 };
 
+/* 机械按键 0~11 的单色表；索引 0~2 是固定白光亮度，索引 3 是 Fade 占位 */
+static const led_color_t mechanical_single_colors[12] = {
+    {0U, 0U, 0U, 254U},   // 0 白光 100%，原始 W254
+    {0U, 0U, 0U, 149U},   // 1 白光 60%，原始 W149
+    {0U, 0U, 0U, 49U},    // 2 白光 20%，原始 W49
+    {0U, 0U, 0U, 0U},     // 3 Fade 占位
+    {254U, 0U, 0U, 0U},   // 4 红
+    {0U, 254U, 0U, 0U},   // 5 绿
+    {0U, 0U, 254U, 0U},   // 6 蓝
+    {127U, 127U, 0U, 0U}, // 7 黄
+    {127U, 0U, 127U, 0U}, // 8 品红
+    {199U, 9U, 49U, 0U},  // 9 粉红
+    {203U, 50U, 0U, 0U},  // 10 橙
+    {0U, 127U, 127U, 0U}, // 11 青
+};
+
+/* 机械按键图案：红绿、三叶草、南瓜头、红绿白、红蓝白、七色环 */
+static const led_color_t mechanical_red_green_colors[2] = {
+    {254U, 0U, 0U, 0U},
+    {0U, 254U, 0U, 0U},
+};
+static const led_color_t mechanical_clover_colors[2] = {
+    {0U, 254U, 0U, 0U},
+    {84U, 84U, 84U, 0U},
+};
+static const led_color_t mechanical_pumpkin_colors[2] = {
+    {203U, 50U, 0U, 0U},
+    {127U, 0U, 127U, 0U},
+};
+static const led_color_t mechanical_red_green_white_colors[3] = {
+    {254U, 0U, 0U, 0U},
+    {0U, 254U, 0U, 0U},
+    {0U, 0U, 0U, 254U},
+};
+static const led_color_t mechanical_red_blue_white_colors[3] = {
+    {254U, 0U, 0U, 0U},
+    {0U, 0U, 254U, 0U},
+    {0U, 0U, 0U, 254U},
+};
+static const led_color_t mechanical_seven_color_ring[7] = {
+    {203U, 50U, 0U, 0U},  // 橙
+    {127U, 127U, 0U, 0U}, // 黄
+    {0U, 254U, 0U, 0U},   // 绿
+    {0U, 127U, 127U, 0U}, // 青
+    {0U, 0U, 254U, 0U},   // 蓝
+    {199U, 9U, 49U, 0U},  // 粉红
+    {254U, 0U, 0U, 0U},   // 红
+};
+
+/*
+ * 机械模式 18“高变化”：
+ * 原始采集的高变化段为 12 盏灯错相 + 7 色轮。
+ * 每个波次约 1537 ms，每盏灯有独立的颜色偏移和时间偏移，
+ * 颜色顺序来自 MechanicalKey-Modes 原始采集的最后几轮。
+ */
+#define MECHANICAL_HIGH_CHANGE_WAVE_MS 1537U
+#define MECHANICAL_HIGH_CHANGE_COLOR_COUNT 7U
+
+static const led_color_t mechanical_high_change_colors[
+    MECHANICAL_HIGH_CHANGE_COLOR_COUNT] = {
+    {0U, 254U, 0U, 0U},   // 0 绿
+    {0U, 127U, 127U, 0U}, // 1 青
+    {0U, 0U, 254U, 0U},   // 2 蓝
+    {199U, 9U, 49U, 0U},  // 3 粉红
+    {254U, 0U, 0U, 0U},   // 4 红
+    {203U, 50U, 0U, 0U},  // 5 橙
+    {127U, 127U, 0U, 0U}, // 6 暖白
+};
+
+/* 12 盏灯在高变化颜色轮上的固定偏移 */
+static const uint8_t mechanical_high_change_color_offset[LED_LAMP_COUNT] = {
+    0U, 1U, 3U, 4U, 5U, 0U, 1U, 3U, 4U, 5U, 2U, 3U,
+};
+
+/* 12 盏灯在高变化波次内的时间偏移，单位 ms */
+static const uint16_t mechanical_high_change_time_offset_ms[LED_LAMP_COUNT] = {
+    0U, 3U, 48U, 93U, 138U, 182U, 267U, 353U, 397U, 483U, 651U, 696U,
+};
+
 /* 当前模式、时间、静态色/图标/White/Modes 状态 */
 static led_animation_mode_t led_animation_mode; // 当前顶层模式
 static uint32_t led_animation_start_time_ms;    // 当前模式/相位的起点
@@ -193,6 +272,7 @@ static uint8_t led_animation_static_color_index; // 当前静态单色索引
 static uint8_t led_animation_icon_index;         // 当前图标索引
 static uint8_t led_animation_white_color_index;  // 当前 White Select 索引
 static uint8_t led_animation_modes_state;        // Modes 的 0~8 状态
+static uint8_t led_animation_mechanical_index;   // 机械按键 0~19 索引
 static uint8_t led_animation_paused_flag;        // 1 表示动画已暂停
 static uint32_t led_animation_pause_time_ms;     // 暂停发生的时刻
 
@@ -343,6 +423,105 @@ static void modes_get_h_lamp_color(uint8_t lamp, uint32_t now_ms,
 }
 
 /**
+ * @brief 取机械模式 18 高变化的单灯颜色
+ * @note 12 灯各自有时间偏移和颜色偏移，波次按 1537 ms 推进。
+ */
+static void mechanical_high_change_get_lamp_color(uint32_t now_ms, uint8_t lamp,
+                                                  led_color_t *output_color)
+{
+    uint8_t lamp_index = (uint8_t)(lamp - 1U);
+    uint32_t elapsed_time_ms = now_ms - led_animation_start_time_ms;
+    uint16_t time_offset_ms = mechanical_high_change_time_offset_ms[lamp_index];
+    uint32_t effective_elapsed_ms;
+    uint32_t wave_index;
+    uint8_t color_index;
+
+    if (elapsed_time_ms > (uint32_t)time_offset_ms) {
+        effective_elapsed_ms = elapsed_time_ms - (uint32_t)time_offset_ms;
+    } else {
+        effective_elapsed_ms = 0U;
+    }
+
+    wave_index = (effective_elapsed_ms / MECHANICAL_HIGH_CHANGE_WAVE_MS) %
+                 MECHANICAL_HIGH_CHANGE_COLOR_COUNT;
+    color_index = (uint8_t)((wave_index +
+                             mechanical_high_change_color_offset[lamp_index]) %
+                            MECHANICAL_HIGH_CHANGE_COLOR_COUNT);
+    *output_color = mechanical_high_change_colors[color_index];
+}
+
+/**
+ * @brief 取机械图案模式（12~17）的单灯颜色
+ */
+static void mechanical_pattern_get_lamp_color(uint8_t mechanical_index,
+                                               uint8_t lamp,
+                                               led_color_t *output_color)
+{
+    uint8_t lamp_index = (uint8_t)(lamp - 1U);
+
+    switch (mechanical_index) {
+        case LED_MECHANICAL_RED_GREEN_ALTERNATE:
+            *output_color =
+                mechanical_red_green_colors[lamp_index % 2U];
+            break;
+        case LED_MECHANICAL_CLOVER:
+            *output_color = mechanical_clover_colors[lamp_index % 2U];
+            break;
+        case LED_MECHANICAL_PUMPKIN:
+            *output_color = mechanical_pumpkin_colors[lamp_index % 2U];
+            break;
+        case LED_MECHANICAL_RED_GREEN_WHITE:
+            *output_color =
+                mechanical_red_green_white_colors[lamp_index % 3U];
+            break;
+        case LED_MECHANICAL_RED_BLUE_WHITE:
+            *output_color =
+                mechanical_red_blue_white_colors[lamp_index % 3U];
+            break;
+        case LED_MECHANICAL_SEVEN_COLOR_RING:
+        default:
+            *output_color =
+                mechanical_seven_color_ring[lamp_index % 7U];
+            break;
+    }
+}
+
+/**
+ * @brief 取机械模式当前单灯颜色（100% 基准）
+ */
+static void mechanical_get_lamp_color(uint32_t now_ms, uint8_t lamp,
+                                       led_color_t *output_color)
+{
+    uint8_t mechanical_index = led_animation_mechanical_index;
+
+    if (mechanical_index == (uint8_t)LED_MECHANICAL_FADE) {
+        fade_get_lamp_color(now_ms, output_color);
+        return;
+    }
+
+    if (mechanical_index == (uint8_t)LED_MECHANICAL_HIGH_CHANGE) {
+        mechanical_high_change_get_lamp_color(now_ms, lamp, output_color);
+        return;
+    }
+
+    if (mechanical_index == (uint8_t)LED_MECHANICAL_OFF) {
+        output_color->r = 0U;
+        output_color->g = 0U;
+        output_color->b = 0U;
+        output_color->w = 0U;
+        return;
+    }
+
+    if (mechanical_index >= (uint8_t)LED_MECHANICAL_RED_GREEN_ALTERNATE) {
+        mechanical_pattern_get_lamp_color(mechanical_index, lamp,
+                                           output_color);
+        return;
+    }
+
+    *output_color = mechanical_single_colors[mechanical_index];
+}
+
+/**
  * @brief 初始化动画层
  */
 void led_animation_init(uint32_t now_ms)
@@ -353,6 +532,7 @@ void led_animation_init(uint32_t now_ms)
     led_animation_icon_index = (uint8_t)LED_ICON_US_FLAG;
     led_animation_white_color_index = (uint8_t)LED_WHITE_WHITE;
     led_animation_modes_state = LED_MODES_RAINBOW;
+    led_animation_mechanical_index = (uint8_t)LED_MECHANICAL_WHITE_100;
     led_animation_paused_flag = 0U;
     led_animation_pause_time_ms = now_ms;
 }
@@ -413,6 +593,48 @@ void led_animation_set_white_color_index(uint8_t white_color_index)
 uint8_t led_animation_get_white_color_index(void)
 {
     return led_animation_white_color_index;
+}
+
+/**
+ * @brief 设置机械按键索引，越界回到白光
+ */
+void led_animation_set_mechanical_index(uint8_t mechanical_index)
+{
+    if (mechanical_index >= (uint8_t)LED_MECHANICAL_MODE_COUNT) {
+        mechanical_index = (uint8_t)LED_MECHANICAL_WHITE_100;
+    }
+    led_animation_mechanical_index = mechanical_index;
+}
+
+/**
+ * @brief 取机械按键索引
+ */
+uint8_t led_animation_get_mechanical_index(void)
+{
+    return led_animation_mechanical_index;
+}
+
+/**
+ * @brief 当前机械索引是否需要乘全局亮度
+ * @note 0~2 已是固定白光亮度（254/149/49）；3 Fade、18 高变化、19 关灯也不乘。
+ */
+bool led_animation_mechanical_uses_global_brightness(void)
+{
+    if (led_animation_mechanical_index <=
+        (uint8_t)LED_MECHANICAL_WHITE_20) {
+        return false;
+    }
+    if (led_animation_mechanical_index == (uint8_t)LED_MECHANICAL_FADE) {
+        return false;
+    }
+    if (led_animation_mechanical_index ==
+        (uint8_t)LED_MECHANICAL_HIGH_CHANGE) {
+        return false;
+    }
+    if (led_animation_mechanical_index == (uint8_t)LED_MECHANICAL_OFF) {
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -543,6 +765,10 @@ void led_animation_get_lamp_color(uint32_t now_ms, uint8_t lamp,
 
         case LED_ANIMATION_MODE_WHITE_SELECT:
             *output_color = white_color_table[led_animation_white_color_index];
+            break;
+
+        case LED_ANIMATION_MODE_MECHANICAL:
+            mechanical_get_lamp_color(now_ms, lamp, output_color);
             break;
 
         case LED_ANIMATION_MODE_OFF:
