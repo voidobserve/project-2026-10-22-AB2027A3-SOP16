@@ -7,7 +7,8 @@ static uint8_t get_key_value(void);
 volatile key_driver_param_t io_scan_param = {
     .scan_times = IO_KEY_SCAN_TIME_MS, // 按键扫描频率, 单位: ms
     .last_key = NO_KEY,                // 上一次get_value按键值, 初始化为NO_KEY;
-    .filter_time = IO_KEY_SCAN_FILTER_TIME_MS, // 按键消抖延时;
+    .filter_time = (IO_KEY_SCAN_FILTER_TIME_MS + IO_KEY_SCAN_TIME_MS - 1) /
+                   IO_KEY_SCAN_TIME_MS, // 按键消抖扫描次数
 
     // 按键判定长按数量
     .long_time = IO_KEY_LONG_TIME_MS / IO_KEY_SCAN_TIME_MS,
@@ -15,7 +16,9 @@ volatile key_driver_param_t io_scan_param = {
     .hold_time =
         (IO_KEY_LONG_TIME_MS + IO_KEY_HOLD_TIME_MS) / IO_KEY_SCAN_TIME_MS,
     // 按键被抬起后等待连击延时数量
-    .click_delay_time = IO_KEY_SCAN_CLICK_DELAY_TIME_MS,
+    .click_delay_time =
+        (IO_KEY_SCAN_CLICK_DELAY_TIME_MS + IO_KEY_SCAN_TIME_MS - 1) /
+        IO_KEY_SCAN_TIME_MS,
     .key_type = KEY_TYPE_IO,
     .get_value = get_key_value,
 };
@@ -61,7 +64,7 @@ uint8_t io_convert_key_event(uint8_t key_driver_val, uint8_t key_driver_event)
 
     if (key_driver_event == KEY_EVENT_CLICK) {
         for (i = 0; i < sizeof(io_key_table) / sizeof(io_key_table[0]); i++) {
-            if (io_key_table[i][0] == key_driver_val) {
+            if (key_driver_val == io_key_table[i][0]) {
                 key_event = io_key_table[i][1];
                 break;
             }

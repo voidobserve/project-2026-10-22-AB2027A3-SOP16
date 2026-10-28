@@ -11,6 +11,7 @@ void io_key_apply(void)
     io_key_event = io_convert_key_event(io_scan_param.latest_key_val,
                                         io_scan_param.latest_key_event);
     io_scan_param.latest_key_val = NO_KEY; // 获取到按键事件后，清空按键值
+	io_scan_param.latest_key_event = KEY_EVENT_NONE;
     if (IO_KEY_EVENT_NONE == io_key_event) {
         return;
     }

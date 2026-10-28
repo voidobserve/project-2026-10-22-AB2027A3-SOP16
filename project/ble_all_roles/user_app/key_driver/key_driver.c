@@ -199,20 +199,13 @@ _notify:
     // if (KEY_TYPE_24G_REMOTE == scan_para->key_type) {
     //     // 如果是2.4G遥控按键
 
-    scan_para->click_cnt = 0;         // 按键按下次数清0
-    scan_para->notify_value = NO_KEY; // 在延时的待发送按键值清零
+    if (key_event != KEY_EVENT_PRESS) {
+        scan_para->click_cnt = 0;         // 按键按下次数清0
+        scan_para->notify_value = NO_KEY; // 在延时的待发送按键值清零
+    }
 
     scan_para->latest_key_val = key_value;   // 存放得到的按键键值
     scan_para->latest_key_event = key_event; // 存放得到的按键事件
-    // }
-    // else if (KEY_TYPE_TOUCH == scan_para->key_type) // 如果是触摸按键
-    // {
-    //     scan_para->click_cnt = 0;         // 按下次数清0
-    //     scan_para->notify_value = NO_KEY; // 在延时的待发送按键值清零
-
-    //     scan_para->latest_key_val = key_value;   // 存放得到的按键键值
-    //     scan_para->latest_key_event = key_event; // 存放得到的按键事件
-    // }
 
 _scan_end:
     scan_para->last_key = cur_key_value;

@@ -41,7 +41,7 @@ void timer3_isq(void)
             rf24g_scan_para.cur_scan_times++;
         }
 
-        // io按键扫描的定时器
+        // io按键扫描的计时器
         if (io_scan_param.cur_scan_times < UINT8_MAX) {
             io_scan_param.cur_scan_times++;
         }

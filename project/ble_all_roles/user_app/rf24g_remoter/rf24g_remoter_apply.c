@@ -22,6 +22,7 @@ void rf24g_remoter_apply(void)
     rf24g_key_event = rf24g_convert_key_event(rf24g_scan_para.latest_key_val,
                                               rf24g_scan_para.latest_key_event);
     rf24g_scan_para.latest_key_val = NO_KEY; // 获取到按键事件后，清空按键值
+    rf24g_scan_para.latest_key_event = KEY_EVENT_NONE;
     if (RF24G_KEY_EVENT_NONE == rf24g_key_event) {
         return;
     }
@@ -37,6 +38,10 @@ void rf24g_remoter_apply(void)
 /* 第一行：开关 */
 void rf24g_key_event_r1c1_press_handle(void)
 {
+#if USER_DEBUG_ENABLE
+    printf("r1c1 press\n");
+#endif
+
     led_app_power_toggle(led_app_get_current_time_ms());
 }
 
@@ -79,8 +84,7 @@ void rf24g_key_event_r3c3_press_handle(void)
 /* 第四行：图标 / 4h timer */
 void rf24g_key_event_r4c2_press_handle(void)
 {
-    led_app_set_icon((uint8_t)LED_ICON_US_FLAG,
-                      led_app_get_current_time_ms());
+    led_app_set_icon((uint8_t)LED_ICON_US_FLAG, led_app_get_current_time_ms());
 }
 
 void rf24g_key_event_r4c3_press_handle(void)
@@ -91,20 +95,18 @@ void rf24g_key_event_r4c3_press_handle(void)
 /* 第五行：图标 */
 void rf24g_key_event_r5c1_press_handle(void)
 {
-    led_app_set_icon((uint8_t)LED_ICON_CLOVER,
-                      led_app_get_current_time_ms());
+    led_app_set_icon((uint8_t)LED_ICON_CLOVER, led_app_get_current_time_ms());
 }
 
 void rf24g_key_event_r5c2_press_handle(void)
 {
-    led_app_set_icon((uint8_t)LED_ICON_PUMPKIN,
-                      led_app_get_current_time_ms());
+    led_app_set_icon((uint8_t)LED_ICON_PUMPKIN, led_app_get_current_time_ms());
 }
 
 void rf24g_key_event_r5c3_press_handle(void)
 {
     led_app_set_icon((uint8_t)LED_ICON_CHRISTMAS,
-                      led_app_get_current_time_ms());
+                     led_app_get_current_time_ms());
 }
 
 /* 第六行：橙 / 绿 / 蓝 / 红 */
